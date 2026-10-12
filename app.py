@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import io
+from datetime import datetime, timezone
 
 import requests
 import streamlit as st
@@ -59,7 +60,13 @@ def api(method, params=None, json=None):
 
 
 def fetch_records():
-    return api("GET", params={"select": LIST_COLUMNS, "order": "id.desc"}).json()
+    # Records marked as deleted stay in the database but are hidden here.
+    params = {
+        "select": LIST_COLUMNS,
+        "order": "id.desc",
+        "or": "(deleted.eq.false,deleted.is.null)",
+    }
+    return api("GET", params=params).json()
 
 
 def fetch_images_b64(rid):
@@ -211,14 +218,23 @@ def start_edit(rec):
 
 
 def delete_record(rid):
+    """Soft delete: hide from the app, but keep the row in the database."""
     try:
-        api("DELETE", params={"id": f"eq.{rid}"})
+        api(
+            "PATCH",
+            params={"id": f"eq.{rid}"},
+            json={
+                "deleted": True,
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
     except Exception as e:
         st.session_state.flash = ("error", f"Could not delete: {e}")
         return
     get_images.clear()
     if st.session_state.editing_id == rid:
         clear_form()
+    st.session_state.flash = ("success", "Deleted from the app. A copy is kept in the database.")
 
 
 def image_grid(imgs, kind=None):
