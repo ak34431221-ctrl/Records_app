@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 
 import requests
@@ -9,6 +10,8 @@ try:
     from st_img_pastebutton import paste
 except Exception:  # package na thakle paste button hide thakbe
     paste = None
+
+MAX_IMAGES = 5
 
 st.set_page_config(page_title="Records", page_icon="📋", layout="wide")
 
@@ -44,12 +47,12 @@ HEADERS = {
 if not SUPABASE_KEY.startswith("sb_"):  # purono (legacy) JWT key hole
     HEADERS["Authorization"] = f"Bearer {SUPABASE_KEY}"
 
-LIST_COLUMNS = "id,name,number,uid,trnx_id,problem,has_image"
+LIST_COLUMNS = "id,name,number,uid,trnx_id,problem,image_count"
 
 
 def api(method, params=None, json=None):
     r = requests.request(
-        method, TABLE_URL, headers=HEADERS, params=params, json=json, timeout=20
+        method, TABLE_URL, headers=HEADERS, params=params, json=json, timeout=30
     )
     r.raise_for_status()
     return r
@@ -59,14 +62,17 @@ def fetch_records():
     return api("GET", params={"select": LIST_COLUMNS, "order": "id.desc"}).json()
 
 
+def fetch_images_b64(rid):
+    rows = api("GET", params={"select": "images", "id": f"eq.{rid}"}).json()
+    return (rows[0].get("images") or []) if rows else []
+
+
 @st.cache_data(show_spinner=False, ttl=3600)
-def get_image(rid):
+def get_images(rid):
     try:
-        rows = api("GET", params={"select": "image", "id": f"eq.{rid}"}).json()
-        b64 = rows[0].get("image") if rows else None
-        return base64.b64decode(b64) if b64 else None
+        return [base64.b64decode(b) for b in fetch_images_b64(rid)]
     except Exception:
-        return None
+        return []
 
 
 def prepare_image(raw: bytes) -> str:
@@ -93,12 +99,12 @@ for k, v in (
     ("f_uid", ""),
     ("f_trnx", ""),
     ("f_problem", ""),
-    ("f_rmimg", False),
     ("editing_id", None),
-    ("editing_has_image", False),
     ("ver", 0),
-    ("cur_up", None),
-    ("cur_paste", None),
+    ("exist_b64", []),      # edit korar shomoy ager save kora chhobi
+    ("pasted_list", []),    # clipboard theke paste kora notun chhobi (bytes)
+    ("last_paste_hash", None),
+    ("cur_up", []),
 ):
     st.session_state.setdefault(k, v)
 
@@ -109,27 +115,32 @@ def clear_form():
     st.session_state.f_uid = ""
     st.session_state.f_trnx = ""
     st.session_state.f_problem = ""
-    st.session_state.f_rmimg = False
     st.session_state.editing_id = None
-    st.session_state.editing_has_image = False
-    st.session_state.cur_up = None
-    st.session_state.cur_paste = None
+    st.session_state.exist_b64 = []
+    st.session_state.pasted_list = []
+    st.session_state.last_paste_hash = None
+    st.session_state.cur_up = []
     st.session_state.ver += 1  # uploader ar paste button reset
 
 
-def staged_image_bytes():
-    """Ekhon baachha/paste kora chhobi (thakle) bytes hishabe."""
+def uploaded_bytes():
     ver = st.session_state.ver
-    up = st.session_state.get(f"up_{ver}") or st.session_state.cur_up
-    if up is not None:
-        return up.getvalue()
-    pasted = st.session_state.get(f"pp_{ver}") or st.session_state.cur_paste
-    if pasted and isinstance(pasted, str) and "," in pasted:
-        try:
-            return base64.b64decode(pasted.split(",", 1)[1])
-        except Exception:
-            return None
-    return None
+    files = st.session_state.get(f"up_{ver}") or st.session_state.cur_up or []
+    return [f.getvalue() for f in files]
+
+
+def total_images():
+    return (
+        len(st.session_state.exist_b64)
+        + len(uploaded_bytes())
+        + len(st.session_state.pasted_list)
+    )
+
+
+def remove_item(kind, i):
+    lst = st.session_state.exist_b64 if kind == "exist" else st.session_state.pasted_list
+    if 0 <= i < len(lst):
+        lst.pop(i)
 
 
 def save_record():
@@ -138,10 +149,25 @@ def save_record():
     uid = st.session_state.f_uid.strip()
     trnx = st.session_state.f_trnx.strip()
     problem = st.session_state.f_problem.strip()
-    raw = staged_image_bytes()
 
-    if not (name or number or uid or trnx or problem or raw):
+    new_raw = uploaded_bytes() + list(st.session_state.pasted_list)
+    n_total = len(st.session_state.exist_b64) + len(new_raw)
+
+    if not (name or number or uid or trnx or problem or n_total):
         st.session_state.flash = ("warning", "Kichu likho, tarpor Save dao.")
+        return
+    if n_total > MAX_IMAGES:
+        st.session_state.flash = (
+            "warning",
+            f"Highest {MAX_IMAGES} ta chhobi dewa jay. {n_total - MAX_IMAGES} ta kombao.",
+        )
+        return
+
+    images = list(st.session_state.exist_b64)
+    try:
+        images += [prepare_image(b) for b in new_raw]
+    except Exception:
+        st.session_state.flash = ("error", "Kono chhobi pora jay ni. Onno chhobi dao.")
         return
 
     payload = {
@@ -150,17 +176,9 @@ def save_record():
         "uid": uid,
         "trnx_id": trnx,
         "problem": problem,
+        "images": images,
+        "image_count": len(images),
     }
-    if raw:
-        try:
-            payload["image"] = prepare_image(raw)
-            payload["has_image"] = True
-        except Exception:
-            st.session_state.flash = ("error", "Chhobi ta pora jay ni. Onno chhobi dao.")
-            return
-    elif st.session_state.editing_id and st.session_state.f_rmimg:
-        payload["image"] = None
-        payload["has_image"] = False
 
     try:
         if st.session_state.editing_id:
@@ -172,7 +190,7 @@ def save_record():
     except Exception as e:
         st.session_state.flash = ("error", f"Save hoy ni: {e}")
         return
-    get_image.clear()
+    get_images.clear()
     clear_form()
     st.session_state.flash = ("success", msg)
 
@@ -185,7 +203,11 @@ def start_edit(rec):
     st.session_state.f_trnx = rec.get("trnx_id") or ""
     st.session_state.f_problem = rec.get("problem") or ""
     st.session_state.editing_id = rec["id"]
-    st.session_state.editing_has_image = bool(rec.get("has_image"))
+    if rec.get("image_count"):
+        try:
+            st.session_state.exist_b64 = fetch_images_b64(rec["id"])
+        except Exception as e:
+            st.session_state.flash = ("error", f"Chhobi ana jay ni: {e}")
 
 
 def delete_record(rid):
@@ -194,9 +216,27 @@ def delete_record(rid):
     except Exception as e:
         st.session_state.flash = ("error", f"Delete hoy ni: {e}")
         return
-    get_image.clear()
+    get_images.clear()
     if st.session_state.editing_id == rid:
         clear_form()
+
+
+def image_grid(imgs, kind=None):
+    """Chhobi gulo 3 column-e dekhay. kind dile protita-r niche remove button."""
+    for start in range(0, len(imgs), 3):
+        cols = st.columns(3)
+        for j, b in enumerate(imgs[start:start + 3]):
+            i = start + j
+            with cols[j]:
+                st.image(b, use_container_width=True)
+                if kind:
+                    st.button(
+                        "✕ Remove",
+                        key=f"rm_{kind}_{i}",
+                        on_click=remove_item,
+                        args=(kind, i),
+                        use_container_width=True,
+                    )
 
 
 # ---------- UI ----------
@@ -215,32 +255,53 @@ with left:
     st.text_input("Number", key="f_number")
     st.text_input("ID", key="f_uid")
     st.text_input("TrnxID", key="f_trnx")
-    st.text_area("Problem", key="f_problem", height=220)
 
-    st.markdown("**Photo**")
+    st.markdown(f"**Photo** (highest {MAX_IMAGES} ta)")
     ver = st.session_state.ver
-    up_file = st.file_uploader(
+    up_files = st.file_uploader(
         "Drag and drop kore dao, ba Browse files e tap koro",
         type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
         key=f"up_{ver}",
     )
-    pasted = None
+    st.session_state.cur_up = up_files or []
+
     if paste is not None:
         pasted = paste(label="📋 Clipboard theke paste koro", key=f"pp_{ver}")
+        if pasted and isinstance(pasted, str) and "," in pasted:
+            h = hashlib.md5(pasted.encode()).hexdigest()
+            if h != st.session_state.last_paste_hash:
+                st.session_state.last_paste_hash = h
+                try:
+                    st.session_state.pasted_list.append(
+                        base64.b64decode(pasted.split(",", 1)[1])
+                    )
+                except Exception:
+                    pass
     else:
         st.caption("Paste button load hoy ni. Drag and drop ba Browse use koro.")
 
-    st.session_state.cur_up = up_file
-    st.session_state.cur_paste = pasted
+    exist_imgs = [base64.b64decode(b) for b in st.session_state.exist_b64]
+    new_uploaded = uploaded_bytes()
+    pasted_imgs = list(st.session_state.pasted_list)
 
-    preview = staged_image_bytes()
-    if preview:
-        st.image(preview, caption="Ei chhobi ta save hobe", use_container_width=True)
-    elif st.session_state.editing_id and st.session_state.editing_has_image:
-        current = get_image(st.session_state.editing_id)
-        if current and not st.session_state.f_rmimg:
-            st.image(current, caption="Ekhonkar chhobi", use_container_width=True)
-        st.checkbox("Ei chhobi ta muche dao", key="f_rmimg")
+    if exist_imgs:
+        st.caption("Ager save kora chhobi")
+        image_grid(exist_imgs, "exist")
+    if pasted_imgs:
+        st.caption("Paste kora notun chhobi")
+        image_grid(pasted_imgs, "paste")
+    if new_uploaded:
+        st.caption("Upload kora notun chhobi (muchte upor-er list-er x tap koro)")
+        image_grid(new_uploaded)
+
+    n = total_images()
+    if n > MAX_IMAGES:
+        st.warning(f"Mot {n} ta chhobi. Highest {MAX_IMAGES} ta dewa jay, {n - MAX_IMAGES} ta kombao.")
+    else:
+        st.caption(f"Chhobi: {n} / {MAX_IMAGES}")
+
+    st.text_area("Problem", key="f_problem", height=220)
 
     b1, b2 = st.columns(2)
     b1.button("Save", type="primary", use_container_width=True, on_click=save_record)
@@ -266,10 +327,10 @@ with right:
                 )
             if rec.get("problem"):
                 st.text(rec["problem"])
-            if rec.get("has_image"):
-                img = get_image(rec["id"])
-                if img:
-                    st.image(img, use_container_width=True)
+            if rec.get("image_count"):
+                imgs = get_images(rec["id"])
+                if imgs:
+                    image_grid(imgs)
             e_col, d_col = st.columns(2)
             e_col.button(
                 "Edit",
