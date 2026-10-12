@@ -527,6 +527,34 @@ def olt_show(items):
         st.code(cmd, language="bash", wrap_lines=True)
 
 
+S.setdefault("olt_rmac_b", "")
+S.setdefault("olt_rmac_h", "")
+
+
+def olt_sync(src, dst):
+    """Keeps the Router MAC box in the BDCOM and HUAWEI tabs the same."""
+    S[dst] = S[src]
+
+
+def olt_router_mac(key, other):
+    """Router MAC box (shown at the top of each tab). Returns (last4, huawei_format)."""
+    raw = olt_clean(
+        st.text_input(
+            "Router MAC (full)",
+            placeholder="14EB-B66B-6EB3",
+            key=key,
+            on_change=olt_sync,
+            args=(key, other),
+        )
+    )
+    digits = re.sub(r"[^0-9A-Fa-f]", "", raw).upper()
+    last4 = digits[-4:] if len(digits) >= 4 else ""
+    huawei_mac = "-".join(digits[i:i + 4] for i in range(0, len(digits), 4)) if digits else ""
+    if last4:
+        st.caption(f"Last 4 digit: {last4}")
+    return last4, huawei_mac
+
+
 def olt_tab():
     st.markdown("### OLT Commands")
 
@@ -534,18 +562,10 @@ def olt_tab():
     pon = c1.number_input("Pon", min_value=0, value=1, step=1, key="olt_pon")
     onu = c2.number_input("Onu", min_value=0, value=1, step=1, key="olt_onu")
 
-    rmac_raw = olt_clean(
-        st.text_input("Router MAC (full)", placeholder="14EB-B66B-6EB3", key="olt_rmac")
-    )
-    digits = re.sub(r"[^0-9A-Fa-f]", "", rmac_raw).upper()
-    last4 = digits[-4:] if len(digits) >= 4 else ""
-    huawei_mac = "-".join(digits[i:i + 4] for i in range(0, len(digits), 4)) if digits else ""
-    if last4:
-        st.caption(f"Last 4 digit: {last4}")
-
     tab_b, tab_h = st.tabs(["BDCOM", "HUAWEI"])
 
     with tab_b:
+        last4, _ = olt_router_mac("olt_rmac_b", "olt_rmac_h")
         b_sn = olt_clean(
             st.text_input("ONU MAC / SN", placeholder="ECOM-9D03FF9B", key="olt_b_sn")
         )
@@ -564,6 +584,7 @@ def olt_tab():
         ])
 
     with tab_h:
+        _, huawei_mac = olt_router_mac("olt_rmac_h", "olt_rmac_b")
         e1, e2 = st.columns([3, 1])
         h_raw = olt_clean(e1.text_input("ONU MAC", placeholder="4577CE9A", key="olt_h_sn"))
         h_parts = [t for t in re.split(r"[:\-\s]+", h_raw) if t]
