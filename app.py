@@ -234,7 +234,7 @@ def delete_record(rid):
     get_images.clear()
     if st.session_state.editing_id == rid:
         clear_form()
-    st.session_state.flash = ("success", "Deleted from the app. A copy is kept in the database.")
+    st.session_state.flash = ("success", "Deleted from the app.")
 
 
 def image_grid(imgs, kind=None):
