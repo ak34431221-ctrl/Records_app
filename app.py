@@ -1,7 +1,9 @@
 import base64
 import hashlib
 import io
-from datetime import datetime, timezone
+import math
+import re
+from datetime import date, datetime, timezone
 
 import requests
 import streamlit as st
@@ -12,32 +14,176 @@ try:
 except Exception:  # if the package is missing, the paste button is hidden
     paste = None
 
-MAX_IMAGES = 5
-
-st.set_page_config(page_title="Records", page_icon="📋", layout="wide")
+st.set_page_config(page_title="My Tools", page_icon="🧰", layout="wide")
 
 st.markdown(
     """
     <style>
     #MainMenu, footer, header {visibility: hidden;}
-    .block-container {padding-top: 2rem; max-width: 1100px;}
+    .block-container {padding-top: 1.5rem; max-width: 1100px;}
+    /* Tabs as boxes */
+    div[data-baseweb="tab-list"] {gap: 10px; flex-wrap: wrap;}
+    div[data-baseweb="tab-highlight"], div[data-baseweb="tab-border"] {display: none !important;}
+    button[data-baseweb="tab"] {
+        background: #ffffff; border: 1px solid #e3e7ee; border-radius: 10px;
+        padding: 8px 18px; height: auto;
+    }
+    button[data-baseweb="tab"] p {font-size: 15px; color: #6b7280 !important;}
+    button[data-baseweb="tab"][aria-selected="true"] {
+        background: #4f7cff; border-color: #4f7cff;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] p {color: #ffffff !important;}
+
+    /* Billing */
+    .card {
+        background: #ffffff; border: 1px solid #eef0f3;
+        border-radius: 14px; padding: 14px 16px; margin-top: 12px;
+        color: #1f2937;
+    }
+    .row {display: flex; justify-content: space-between; padding: 5px 0;
+          font-size: 15px; color: #6b7280;}
+    .row b {color: #1f2937; font-weight: 500;}
+    .row b.blue {color: #4f7cff; font-weight: 600;}
+    .opt-title {font-size: 13px; color: #9ca3af; margin-bottom: 4px;}
+    .total {font-size: 26px; font-weight: 600; color: #1f2937;}
+    .pair {display: flex; justify-content: space-between; gap: 12px;}
+    .pair > div {flex: 1;}
+    .sub {font-size: 12px; color: #9ca3af;}
+    .round {font-size: 26px; font-weight: 600; color: #4f7cff;}
+
+    /* OLT commands */
+    .label {font-size: 13px; color: #6b7280; margin: 14px 0 4px;}
+    div[data-testid="stCodeBlock"] pre {
+        background: #ffffff !important;
+        border: 1px solid #eef0f3;
+        border-radius: 12px;
+    }
+    div[data-testid="stCodeBlock"] code {color: #1f2937 !important;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ---------- Supabase (free database) ----------
+S = st.session_state
+
+
+def narrow():
+    """Centered, narrower column for the small tools."""
+    _, mid, _ = st.columns([1, 2, 1])
+    return mid
+
+
+# =====================================================================
+# 1. BILLING
+# =====================================================================
+ONU_DEPOSIT = 500
+MONTH_DAYS = 31
+MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+YEARS = list(range(2020, 2036))
+
+
+def round_up_5(x):
+    n = math.floor(x + 0.5)
+    return math.ceil(n / 5) * 5
+
+
+def billing_tab():
+    try:
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo("Asia/Dhaka")).date()
+    except Exception:
+        today = date.today()
+
+    st.markdown("### Billing")
+    st.markdown("Connection date")
+    c_day, c_month, c_year = st.columns([1, 2, 1.3])
+    sel_day = c_day.selectbox("Date", list(range(1, 32)), index=today.day - 1, key="bl_day")
+    sel_month = c_month.selectbox(
+        "Month",
+        list(range(1, 13)),
+        index=today.month - 1,
+        format_func=lambda m: f"{m} - {MONTHS[m - 1]}",
+        key="bl_month",
+    )
+    sel_year = c_year.selectbox(
+        "Year",
+        YEARS,
+        index=YEARS.index(today.year) if today.year in YEARS else 0,
+        key="bl_year",
+    )
+    package = st.number_input("Package (Tk)", min_value=0, value=0, step=50, key="bl_pkg")
+
+    signature = (sel_day, sel_month, sel_year, package)
+
+    if st.button("Calculate", use_container_width=True, key="bl_calc"):
+        try:
+            connection_date = date(sel_year, sel_month, sel_day)
+        except ValueError:
+            connection_date = None
+
+        if connection_date is None:
+            result = ("error", "This date does not exist. Please check the date and month.")
+        elif package <= 0:
+            result = ("warning", "Enter a package amount.")
+        else:
+            running_days = max(0, MONTH_DAYS - connection_date.day + 1)
+            running_month = running_days * (package / MONTH_DAYS)
+            option1 = running_month + ONU_DEPOSIT
+            option2 = running_month + package + ONU_DEPOSIT
+            html = f"""
+            <div class="card">
+              <div class="row">Connection date<b>{connection_date.strftime('%d-%m-%Y')}</b></div>
+              <div class="row">Running days<b>{running_days} days</b></div>
+              <div class="row">Running month<b>{running_month:.0f} Tk</b></div>
+              <div class="row">Running month (round figure)<b class="blue">{round_up_5(running_month)} Tk</b></div>
+              <div class="row">ONU deposit<b>{ONU_DEPOSIT} Tk</b></div>
+            </div>
+            <div class="card">
+              <div class="opt-title">Option 1 · Running + ONU</div>
+              <div class="pair">
+                <div><div class="sub">Total</div><div class="total">{option1:.0f} Tk</div></div>
+                <div><div class="sub">Round figure</div><div class="round">{round_up_5(option1)} Tk</div></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="opt-title">Option 2 · Running + 1 month advance + ONU</div>
+              <div class="pair">
+                <div><div class="sub">Total</div><div class="total">{option2:.0f} Tk</div></div>
+                <div><div class="sub">Round figure</div><div class="round">{round_up_5(option2)} Tk</div></div>
+              </div>
+              <div class="row">Advance<b>{package} Tk</b></div>
+            </div>
+            """
+            result = ("html", html)
+        S.bl_result = (signature, result)
+
+    # Show the last result only while the inputs are unchanged.
+    saved = S.get("bl_result")
+    if saved and saved[0] == signature:
+        kind, content = saved[1]
+        if kind == "html":
+            st.markdown(content, unsafe_allow_html=True)
+        else:
+            getattr(st, kind)(content)
+
+
+# =====================================================================
+# 2. RECORDS (Supabase)
+# =====================================================================
+MAX_IMAGES = 5
+
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"].strip().rstrip("/")
     if SUPABASE_URL.endswith("/rest/v1"):
         SUPABASE_URL = SUPABASE_URL[: -len("/rest/v1")]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"].strip()
+    DB_OK = True
 except Exception:
-    st.error(
-        "Could not connect to the database. Add SUPABASE_URL and SUPABASE_KEY "
-        "in the Streamlit app Settings > Secrets."
-    )
-    st.stop()
+    SUPABASE_URL = SUPABASE_KEY = ""
+    DB_OK = False
 
 TABLE_URL = f"{SUPABASE_URL}/rest/v1/records"
 HEADERS = {
@@ -45,7 +191,7 @@ HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "return=minimal",
 }
-if not SUPABASE_KEY.startswith("sb_"):  # legacy JWT key
+if SUPABASE_KEY and not SUPABASE_KEY.startswith("sb_"):  # legacy JWT key
     HEADERS["Authorization"] = f"Bearer {SUPABASE_KEY}"
 
 LIST_COLUMNS = "id,name,number,uid,trnx_id,problem,image_count"
@@ -59,6 +205,7 @@ def api(method, params=None, json=None):
     return r
 
 
+@st.cache_data(show_spinner=False, ttl=15)
 def fetch_records():
     # Records marked as deleted stay in the database but are hidden here.
     params = {
@@ -99,82 +246,76 @@ def prepare_image(raw: bytes) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-# ---------- Form state ----------
-for k, v in (
-    ("f_name", ""),
-    ("f_number", ""),
-    ("f_uid", ""),
-    ("f_trnx", ""),
-    ("f_problem", ""),
-    ("editing_id", None),
-    ("ver", 0),
-    ("exist_b64", []),      # photos already saved (when editing)
-    ("pasted_list", []),    # newly pasted photos (bytes)
-    ("last_paste_hash", None),
-    ("cur_up", []),
+for _k, _v in (
+    ("r_name", ""),
+    ("r_number", ""),
+    ("r_uid", ""),
+    ("r_trnx", ""),
+    ("r_problem", ""),
+    ("r_editing_id", None),
+    ("r_ver", 0),
+    ("r_exist_b64", []),   # photos already saved (when editing)
+    ("r_pasted", []),      # newly pasted photos (bytes)
+    ("r_last_hash", None),
+    ("r_cur_up", []),
 ):
-    st.session_state.setdefault(k, v)
+    S.setdefault(_k, _v)
 
 
-def clear_form():
-    st.session_state.f_name = ""
-    st.session_state.f_number = ""
-    st.session_state.f_uid = ""
-    st.session_state.f_trnx = ""
-    st.session_state.f_problem = ""
-    st.session_state.editing_id = None
-    st.session_state.exist_b64 = []
-    st.session_state.pasted_list = []
-    st.session_state.last_paste_hash = None
-    st.session_state.cur_up = []
-    st.session_state.ver += 1  # resets the uploader and the paste button
+def r_clear_form():
+    S.r_name = ""
+    S.r_number = ""
+    S.r_uid = ""
+    S.r_trnx = ""
+    S.r_problem = ""
+    S.r_editing_id = None
+    S.r_exist_b64 = []
+    S.r_pasted = []
+    S.r_last_hash = None
+    S.r_cur_up = []
+    S.r_ver += 1  # resets the uploader and the paste button
 
 
-def uploaded_bytes():
-    ver = st.session_state.ver
-    files = st.session_state.get(f"up_{ver}") or st.session_state.cur_up or []
+def r_uploaded_bytes():
+    files = S.get(f"r_up_{S.r_ver}") or S.r_cur_up or []
     return [f.getvalue() for f in files]
 
 
-def total_images():
-    return (
-        len(st.session_state.exist_b64)
-        + len(uploaded_bytes())
-        + len(st.session_state.pasted_list)
-    )
+def r_total_images():
+    return len(S.r_exist_b64) + len(r_uploaded_bytes()) + len(S.r_pasted)
 
 
-def remove_item(kind, i):
-    lst = st.session_state.exist_b64 if kind == "exist" else st.session_state.pasted_list
+def r_remove_item(kind, i):
+    lst = S.r_exist_b64 if kind == "exist" else S.r_pasted
     if 0 <= i < len(lst):
         lst.pop(i)
 
 
-def save_record():
-    name = st.session_state.f_name.strip()
-    number = st.session_state.f_number.strip()
-    uid = st.session_state.f_uid.strip()
-    trnx = st.session_state.f_trnx.strip()
-    problem = st.session_state.f_problem.strip()
+def r_save():
+    name = S.r_name.strip()
+    number = S.r_number.strip()
+    uid = S.r_uid.strip()
+    trnx = S.r_trnx.strip()
+    problem = S.r_problem.strip()
 
-    new_raw = uploaded_bytes() + list(st.session_state.pasted_list)
-    n_total = len(st.session_state.exist_b64) + len(new_raw)
+    new_raw = r_uploaded_bytes() + list(S.r_pasted)
+    n_total = len(S.r_exist_b64) + len(new_raw)
 
     if not (name or number or uid or trnx or problem or n_total):
-        st.session_state.flash = ("warning", "Please fill in something before saving.")
+        S.r_flash = ("warning", "Please fill in something before saving.")
         return
     if n_total > MAX_IMAGES:
-        st.session_state.flash = (
+        S.r_flash = (
             "warning",
             f"You can add up to {MAX_IMAGES} photos. Please remove {n_total - MAX_IMAGES}.",
         )
         return
 
-    images = list(st.session_state.exist_b64)
+    images = list(S.r_exist_b64)
     try:
         images += [prepare_image(b) for b in new_raw]
     except Exception:
-        st.session_state.flash = ("error", "Could not read one of the photos. Please use a different photo.")
+        S.r_flash = ("error", "Could not read one of the photos. Please use a different photo.")
         return
 
     payload = {
@@ -186,38 +327,38 @@ def save_record():
         "images": images,
         "image_count": len(images),
     }
-
     try:
-        if st.session_state.editing_id:
-            api("PATCH", params={"id": f"eq.{st.session_state.editing_id}"}, json=payload)
+        if S.r_editing_id:
+            api("PATCH", params={"id": f"eq.{S.r_editing_id}"}, json=payload)
             msg = "Updated."
         else:
             api("POST", json=payload)
             msg = "Saved."
     except Exception as e:
-        st.session_state.flash = ("error", f"Could not save: {e}")
+        S.r_flash = ("error", f"Could not save: {e}")
         return
     get_images.clear()
-    clear_form()
-    st.session_state.flash = ("success", msg)
+    fetch_records.clear()
+    r_clear_form()
+    S.r_flash = ("success", msg)
 
 
-def start_edit(rec):
-    clear_form()
-    st.session_state.f_name = rec.get("name") or ""
-    st.session_state.f_number = rec.get("number") or ""
-    st.session_state.f_uid = rec.get("uid") or ""
-    st.session_state.f_trnx = rec.get("trnx_id") or ""
-    st.session_state.f_problem = rec.get("problem") or ""
-    st.session_state.editing_id = rec["id"]
+def r_start_edit(rec):
+    r_clear_form()
+    S.r_name = rec.get("name") or ""
+    S.r_number = rec.get("number") or ""
+    S.r_uid = rec.get("uid") or ""
+    S.r_trnx = rec.get("trnx_id") or ""
+    S.r_problem = rec.get("problem") or ""
+    S.r_editing_id = rec["id"]
     if rec.get("image_count"):
         try:
-            st.session_state.exist_b64 = fetch_images_b64(rec["id"])
+            S.r_exist_b64 = fetch_images_b64(rec["id"])
         except Exception as e:
-            st.session_state.flash = ("error", f"Could not load photos: {e}")
+            S.r_flash = ("error", f"Could not load photos: {e}")
 
 
-def delete_record(rid):
+def r_delete(rid):
     """Soft delete: hide from the app, but keep the row in the database."""
     try:
         api(
@@ -229,15 +370,16 @@ def delete_record(rid):
             },
         )
     except Exception as e:
-        st.session_state.flash = ("error", f"Could not delete: {e}")
+        S.r_flash = ("error", f"Could not delete: {e}")
         return
     get_images.clear()
-    if st.session_state.editing_id == rid:
-        clear_form()
-    st.session_state.flash = ("success", "Deleted from the app.")
+    fetch_records.clear()
+    if S.r_editing_id == rid:
+        r_clear_form()
+    S.r_flash = ("success", "Deleted from the app. A copy is kept in the database.")
 
 
-def image_grid(imgs, kind=None):
+def r_image_grid(imgs, kind=None):
     """Show photos in 3 columns. If kind is given, add a remove button under each."""
     for start in range(0, len(imgs), 3):
         cols = st.columns(3)
@@ -248,117 +390,289 @@ def image_grid(imgs, kind=None):
                 if kind:
                     st.button(
                         "✕ Remove",
-                        key=f"rm_{kind}_{i}",
-                        on_click=remove_item,
+                        key=f"r_rm_{kind}_{i}",
+                        on_click=r_remove_item,
                         args=(kind, i),
                         use_container_width=True,
                     )
 
 
-# ---------- UI ----------
-st.markdown("### Records")
+def records_tab():
+    st.markdown("### Records")
 
-flash = st.session_state.pop("flash", None)
-if flash:
-    getattr(st, flash[0])(flash[1])
+    if not DB_OK:
+        st.error(
+            "Could not connect to the database. Add SUPABASE_URL and SUPABASE_KEY "
+            "in the Streamlit app Settings > Secrets."
+        )
+        return
 
-left, right = st.columns([1, 1], gap="large")
+    flash = S.pop("r_flash", None)
+    if flash:
+        getattr(st, flash[0])(flash[1])
 
-with left:
-    if st.session_state.editing_id:
-        st.info("Editing a record. Press Save to update, or Remove to cancel.")
-    st.text_input("Name", key="f_name")
-    st.text_input("Number", key="f_number")
-    st.text_input("ID", key="f_uid")
-    st.text_input("TrnxID", key="f_trnx")
+    left, right = st.columns([1, 1], gap="large")
 
-    st.markdown(f"**Photo** (up to {MAX_IMAGES})")
-    ver = st.session_state.ver
-    up_files = st.file_uploader(
-        "Drag and drop photos here, or click Browse files",
-        type=["png", "jpg", "jpeg", "webp"],
-        accept_multiple_files=True,
-        key=f"up_{ver}",
-    )
-    st.session_state.cur_up = up_files or []
+    with left:
+        if S.r_editing_id:
+            st.info("Editing a record. Press Save to update, or Remove to cancel.")
+        st.text_input("Name", key="r_name")
+        st.text_input("Number", key="r_number")
+        st.text_input("ID", key="r_uid")
+        st.text_input("TrnxID", key="r_trnx")
 
-    if paste is not None:
-        pasted = paste(label="📋 Paste from clipboard", key=f"pp_{ver}")
-        if pasted and isinstance(pasted, str) and "," in pasted:
-            h = hashlib.md5(pasted.encode()).hexdigest()
-            if h != st.session_state.last_paste_hash:
-                st.session_state.last_paste_hash = h
-                try:
-                    st.session_state.pasted_list.append(
-                        base64.b64decode(pasted.split(",", 1)[1])
+        st.markdown(f"**Photo** (up to {MAX_IMAGES})")
+        ver = S.r_ver
+        up_files = st.file_uploader(
+            "Drag and drop photos here, or click Browse files",
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key=f"r_up_{ver}",
+        )
+        S.r_cur_up = up_files or []
+
+        if paste is not None:
+            pasted = paste(label="📋 Paste from clipboard", key=f"r_pp_{ver}")
+            if pasted and isinstance(pasted, str) and "," in pasted:
+                h = hashlib.md5(pasted.encode()).hexdigest()
+                if h != S.r_last_hash:
+                    S.r_last_hash = h
+                    try:
+                        S.r_pasted.append(base64.b64decode(pasted.split(",", 1)[1]))
+                    except Exception:
+                        pass
+        else:
+            st.caption("Paste button could not load. Use drag and drop or Browse files.")
+
+        exist_imgs = [base64.b64decode(b) for b in S.r_exist_b64]
+        new_uploaded = r_uploaded_bytes()
+        pasted_imgs = list(S.r_pasted)
+
+        if exist_imgs:
+            st.caption("Saved photos")
+            r_image_grid(exist_imgs, "exist")
+        if pasted_imgs:
+            st.caption("Pasted photos")
+            r_image_grid(pasted_imgs, "paste")
+        if new_uploaded:
+            st.caption("Uploaded photos (use the x in the upload list above to remove)")
+            r_image_grid(new_uploaded)
+
+        n = r_total_images()
+        if n > MAX_IMAGES:
+            st.warning(f"Total {n} photos. Maximum is {MAX_IMAGES}, please remove {n - MAX_IMAGES}.")
+        else:
+            st.caption(f"Photos: {n} / {MAX_IMAGES}")
+
+        st.text_area("Problem", key="r_problem", height=220)
+
+        b1, b2 = st.columns(2)
+        b1.button("Save", type="primary", use_container_width=True, on_click=r_save, key="r_save")
+        b2.button("Remove", use_container_width=True, on_click=r_clear_form, key="r_remove")
+
+    with right:
+        st.markdown("**Saved**")
+        try:
+            records = fetch_records()
+        except Exception as e:
+            records = []
+            st.error(f"Could not load saved records: {e}")
+
+        if not records:
+            st.caption("Nothing saved yet.")
+
+        for rec in records:
+            with st.container(border=True):
+                st.markdown(f"**{rec.get('name') or '-'}**  ·  ID: {rec.get('uid') or '-'}")
+                if rec.get("number") or rec.get("trnx_id"):
+                    st.caption(
+                        f"Number: {rec.get('number') or '-'}  ·  TrnxID: {rec.get('trnx_id') or '-'}"
                     )
-                except Exception:
-                    pass
-    else:
-        st.caption("Paste button could not load. Use drag and drop or Browse files.")
-
-    exist_imgs = [base64.b64decode(b) for b in st.session_state.exist_b64]
-    new_uploaded = uploaded_bytes()
-    pasted_imgs = list(st.session_state.pasted_list)
-
-    if exist_imgs:
-        st.caption("Saved photos")
-        image_grid(exist_imgs, "exist")
-    if pasted_imgs:
-        st.caption("Pasted photos")
-        image_grid(pasted_imgs, "paste")
-    if new_uploaded:
-        st.caption("Uploaded photos (use the x in the upload list above to remove)")
-        image_grid(new_uploaded)
-
-    n = total_images()
-    if n > MAX_IMAGES:
-        st.warning(f"Total {n} photos. Maximum is {MAX_IMAGES}, please remove {n - MAX_IMAGES}.")
-    else:
-        st.caption(f"Photos: {n} / {MAX_IMAGES}")
-
-    st.text_area("Problem", key="f_problem", height=220)
-
-    b1, b2 = st.columns(2)
-    b1.button("Save", type="primary", use_container_width=True, on_click=save_record)
-    b2.button("Remove", use_container_width=True, on_click=clear_form)
-
-with right:
-    st.markdown("**Saved**")
-    try:
-        records = fetch_records()
-    except Exception as e:
-        records = []
-        st.error(f"Could not load saved records: {e}")
-
-    if not records:
-        st.caption("Nothing saved yet.")
-
-    for rec in records:
-        with st.container(border=True):
-            st.markdown(f"**{rec.get('name') or '-'}**  ·  ID: {rec.get('uid') or '-'}")
-            if rec.get("number") or rec.get("trnx_id"):
-                st.caption(
-                    f"Number: {rec.get('number') or '-'}  ·  TrnxID: {rec.get('trnx_id') or '-'}"
+                if rec.get("problem"):
+                    st.text(rec["problem"])
+                if rec.get("image_count"):
+                    imgs = get_images(rec["id"])
+                    if imgs:
+                        r_image_grid(imgs)
+                e_col, d_col = st.columns(2)
+                e_col.button(
+                    "Edit",
+                    key=f"r_edit_{rec['id']}",
+                    use_container_width=True,
+                    on_click=r_start_edit,
+                    args=(rec,),
                 )
-            if rec.get("problem"):
-                st.text(rec["problem"])
-            if rec.get("image_count"):
-                imgs = get_images(rec["id"])
-                if imgs:
-                    image_grid(imgs)
-            e_col, d_col = st.columns(2)
-            e_col.button(
-                "Edit",
-                key=f"edit_{rec['id']}",
-                use_container_width=True,
-                on_click=start_edit,
-                args=(rec,),
-            )
-            d_col.button(
-                "Delete",
-                key=f"del_{rec['id']}",
-                use_container_width=True,
-                on_click=delete_record,
-                args=(rec["id"],),
-            )
+                d_col.button(
+                    "Delete",
+                    key=f"r_del_{rec['id']}",
+                    use_container_width=True,
+                    on_click=r_delete,
+                    args=(rec["id"],),
+                )
+
+
+# =====================================================================
+# 3. OLT COMMANDS
+# =====================================================================
+def olt_clean(text):
+    """Removes anything inside () and the words Huawei / Bdcom / V.Sol."""
+    text = re.sub(r"\([^)]*\)?", " ", text)
+    text = re.sub(r"(?i)huawei|bdcom|v\.?\s?sol", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def olt_show(items):
+    for name, cmd in items:
+        st.markdown(f'<div class="label">{name}</div>', unsafe_allow_html=True)
+        st.code(cmd, language="bash", wrap_lines=True)
+
+
+def olt_tab():
+    st.markdown("### OLT Commands")
+
+    c1, c2 = st.columns(2)
+    pon = c1.number_input("Pon", min_value=0, value=1, step=1, key="olt_pon")
+    onu = c2.number_input("Onu", min_value=0, value=1, step=1, key="olt_onu")
+
+    rmac_raw = olt_clean(
+        st.text_input("Router MAC (full)", placeholder="14EB-B66B-6EB3", key="olt_rmac")
+    )
+    digits = re.sub(r"[^0-9A-Fa-f]", "", rmac_raw).upper()
+    last4 = digits[-4:] if len(digits) >= 4 else ""
+    huawei_mac = "-".join(digits[i:i + 4] for i in range(0, len(digits), 4)) if digits else ""
+    if last4:
+        st.caption(f"Last 4 digit: {last4}")
+
+    tab_b, tab_h = st.tabs(["BDCOM", "HUAWEI"])
+
+    with tab_b:
+        b_sn = olt_clean(
+            st.text_input("ONU MAC / SN", placeholder="ECOM-9D03FF9B", key="olt_b_sn")
+        )
+        olt_show([
+            ("Find Onu (ONU MAC)", f"show gpon onu-information sn {b_sn or '<ONU MAC>'}"),
+            ("Find Onu (Router MAC)", f"show mac address-table | include {last4 or '<Router MAC>'}"),
+            ("Onu Info", f"show gpon interface gpon 0/{pon}:{onu} onu basic-info"),
+            ("Onu Power", f"show gpon interface gpon 0/{pon}:{onu} onu optical-transceiver-diagnosis"),
+            ("Check Port", f"show gpon interface gpon 0/{pon}:{onu} onu port 1 state"),
+            ("Reboot", f"gpon reboot onu interface gpon 0/{pon}:{onu}"),
+            ("Mac Address Show", f"show mac address-table interface gpon 0/{pon}:{onu}"),
+            ("Total Inactive Onu in PON", f"show gpon inactive-onu interface gpon 0/{pon}"),
+            ("Total Losi in PON", f"show gpon inactive-onu interface gpon 0/{pon} | include losi"),
+            ("All PON Status", "show interface brief"),
+            ("PON Port Open Check", f"show interface range gpon 0/{pon}"),
+        ])
+
+    with tab_h:
+        e1, e2 = st.columns([3, 1])
+        h_raw = olt_clean(e1.text_input("ONU MAC", placeholder="4577CE9A", key="olt_h_sn"))
+        h_parts = [t for t in re.split(r"[:\-\s]+", h_raw) if t]
+        h_sn = re.sub(r"(?i)^(hwtc|htwc)", "", h_parts[-1]).upper() if h_parts else ""
+        slot = e2.number_input("Slot 0/_", min_value=0, value=1, step=1, key="olt_h_slot")
+
+        olt_show([
+            ("Find Onu (ONU MAC)", f"display ont info by-sn {h_sn or '<ONU MAC>'}"),
+            ("Find Onu (Router MAC)", f"display location {huawei_mac or '<Router MAC>'}"),
+            ("Onu Info", f"display ont optical-info {pon} {onu}"),
+            ("Reset", f"ont reset {pon} {onu}"),
+            ("Onu All Power", f"display ont optical-info history rx {pon} {onu}"),
+            ("Total Inactive Onu in PON", f"display ont info summary {pon}"),
+            ("Total Losi in PON", f"display ont info summary {pon} | include LOSi/LOBi"),
+            ("Total Offline Onu in PON", f"display ont info summary {pon} | include offline"),
+            (
+                "Port Check (exit the interface first)",
+                f"quit\ninterface gpon 0/{slot}\ndisplay ont port state {pon} {onu} eth-port all",
+            ),
+        ])
+
+
+# =====================================================================
+# 4. CUSTOMER INFO (Notepad download)
+# =====================================================================
+CU_FIELDS = [
+    ("Name", "cu_name"),
+    ("Contact", "cu_contact"),
+    ("Building Name", "cu_building"),
+    ("Floor", "cu_floor"),
+    ("Road Name", "cu_road_name"),
+    ("Road Number", "cu_road_no"),
+    ("Block/Sector", "cu_block"),
+    ("Area", "cu_area"),
+]
+CU_BILLING_KEY = "cu_billing"
+CU_ALL_KEYS = [k for _, k in CU_FIELDS] + [CU_BILLING_KEY]
+
+for _k in CU_ALL_KEYS:
+    S.setdefault(_k, "")
+
+
+def cu_remove_all():
+    for k in CU_ALL_KEYS:
+        S[k] = ""
+    S.pop("cu_saved_text", None)
+    S.pop("cu_saved_name", None)
+
+
+def cu_build_text():
+    lines = [f"{label} : {S[key].strip()}" for label, key in CU_FIELDS]
+    lines.append(f"Details Billing Info : {S[CU_BILLING_KEY].strip()}")
+    return "\n".join(lines) + "\n"
+
+
+def customer_tab():
+    st.markdown("### Customer Info")
+
+    for label, key in CU_FIELDS:
+        if key == "cu_area":
+            st.text_area(label, key=key, height=130)
+        else:
+            st.text_input(label, key=key)
+    st.text_area("Details Billing Info", key=CU_BILLING_KEY, height=130)
+
+    c1, c2 = st.columns(2)
+    save_clicked = c1.button("Save", type="primary", use_container_width=True, key="cu_save")
+    c2.button("Remove all", on_click=cu_remove_all, use_container_width=True, key="cu_remove")
+
+    if save_clicked:
+        name = S["cu_name"].strip()
+        if not name:
+            st.warning("Please enter a name before saving.")
+            S.pop("cu_saved_text", None)
+        else:
+            safe = re.sub(r'[\\/:*?"<>|]+', "_", name)
+            S.cu_saved_text = cu_build_text()
+            S.cu_saved_name = f"{safe}.txt"
+
+    if S.get("cu_saved_text"):
+        st.success("Saved. Tap the button below to download the Notepad file.")
+        st.download_button(
+            "Download Notepad file (.txt)",
+            data=S.cu_saved_text.encode("utf-8-sig"),
+            file_name=S.cu_saved_name,
+            mime="text/plain",
+            use_container_width=True,
+            key="cu_download",
+        )
+
+
+# =====================================================================
+# MAIN: top tabs
+# =====================================================================
+tab_billing, tab_records, tab_olt, tab_customer = st.tabs(
+    ["Billing", "Records", "OLT Commands", "Customer Info"]
+)
+
+with tab_billing:
+    with narrow():
+        billing_tab()
+
+with tab_records:
+    records_tab()
+
+with tab_olt:
+    with narrow():
+        olt_tab()
+
+with tab_customer:
+    with narrow():
+        customer_tab()
