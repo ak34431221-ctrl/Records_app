@@ -8,7 +8,7 @@ from PIL import Image, ImageOps
 
 try:
     from st_img_pastebutton import paste
-except Exception:  # package na thakle paste button hide thakbe
+except Exception:  # if the package is missing, the paste button is hidden
     paste = None
 
 MAX_IMAGES = 5
@@ -33,8 +33,8 @@ try:
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"].strip()
 except Exception:
     st.error(
-        "Database connect kora hoy ni. Streamlit-er App settings > Secrets e "
-        "SUPABASE_URL ar SUPABASE_KEY dao."
+        "Could not connect to the database. Add SUPABASE_URL and SUPABASE_KEY "
+        "in the Streamlit app Settings > Secrets."
     )
     st.stop()
 
@@ -44,7 +44,7 @@ HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "return=minimal",
 }
-if not SUPABASE_KEY.startswith("sb_"):  # purono (legacy) JWT key hole
+if not SUPABASE_KEY.startswith("sb_"):  # legacy JWT key
     HEADERS["Authorization"] = f"Bearer {SUPABASE_KEY}"
 
 LIST_COLUMNS = "id,name,number,uid,trnx_id,problem,image_count"
@@ -76,7 +76,7 @@ def get_images(rid):
 
 
 def prepare_image(raw: bytes) -> str:
-    """Chhobi chhoto kore (max 1280px) JPEG banay, tarpor base64 text."""
+    """Shrink the photo (max 1280px), convert to JPEG, return base64 text."""
     img = Image.open(io.BytesIO(raw))
     img = ImageOps.exif_transpose(img)
     if img.mode in ("RGBA", "LA", "P"):
@@ -101,8 +101,8 @@ for k, v in (
     ("f_problem", ""),
     ("editing_id", None),
     ("ver", 0),
-    ("exist_b64", []),      # edit korar shomoy ager save kora chhobi
-    ("pasted_list", []),    # clipboard theke paste kora notun chhobi (bytes)
+    ("exist_b64", []),      # photos already saved (when editing)
+    ("pasted_list", []),    # newly pasted photos (bytes)
     ("last_paste_hash", None),
     ("cur_up", []),
 ):
@@ -120,7 +120,7 @@ def clear_form():
     st.session_state.pasted_list = []
     st.session_state.last_paste_hash = None
     st.session_state.cur_up = []
-    st.session_state.ver += 1  # uploader ar paste button reset
+    st.session_state.ver += 1  # resets the uploader and the paste button
 
 
 def uploaded_bytes():
@@ -154,12 +154,12 @@ def save_record():
     n_total = len(st.session_state.exist_b64) + len(new_raw)
 
     if not (name or number or uid or trnx or problem or n_total):
-        st.session_state.flash = ("warning", "Kichu likho, tarpor Save dao.")
+        st.session_state.flash = ("warning", "Please fill in something before saving.")
         return
     if n_total > MAX_IMAGES:
         st.session_state.flash = (
             "warning",
-            f"Highest {MAX_IMAGES} ta chhobi dewa jay. {n_total - MAX_IMAGES} ta kombao.",
+            f"You can add up to {MAX_IMAGES} photos. Please remove {n_total - MAX_IMAGES}.",
         )
         return
 
@@ -167,7 +167,7 @@ def save_record():
     try:
         images += [prepare_image(b) for b in new_raw]
     except Exception:
-        st.session_state.flash = ("error", "Kono chhobi pora jay ni. Onno chhobi dao.")
+        st.session_state.flash = ("error", "Could not read one of the photos. Please use a different photo.")
         return
 
     payload = {
@@ -183,12 +183,12 @@ def save_record():
     try:
         if st.session_state.editing_id:
             api("PATCH", params={"id": f"eq.{st.session_state.editing_id}"}, json=payload)
-            msg = "Update hoyeche."
+            msg = "Updated."
         else:
             api("POST", json=payload)
-            msg = "Save hoyeche."
+            msg = "Saved."
     except Exception as e:
-        st.session_state.flash = ("error", f"Save hoy ni: {e}")
+        st.session_state.flash = ("error", f"Could not save: {e}")
         return
     get_images.clear()
     clear_form()
@@ -207,14 +207,14 @@ def start_edit(rec):
         try:
             st.session_state.exist_b64 = fetch_images_b64(rec["id"])
         except Exception as e:
-            st.session_state.flash = ("error", f"Chhobi ana jay ni: {e}")
+            st.session_state.flash = ("error", f"Could not load photos: {e}")
 
 
 def delete_record(rid):
     try:
         api("DELETE", params={"id": f"eq.{rid}"})
     except Exception as e:
-        st.session_state.flash = ("error", f"Delete hoy ni: {e}")
+        st.session_state.flash = ("error", f"Could not delete: {e}")
         return
     get_images.clear()
     if st.session_state.editing_id == rid:
@@ -222,7 +222,7 @@ def delete_record(rid):
 
 
 def image_grid(imgs, kind=None):
-    """Chhobi gulo 3 column-e dekhay. kind dile protita-r niche remove button."""
+    """Show photos in 3 columns. If kind is given, add a remove button under each."""
     for start in range(0, len(imgs), 3):
         cols = st.columns(3)
         for j, b in enumerate(imgs[start:start + 3]):
@@ -250,16 +250,16 @@ left, right = st.columns([1, 1], gap="large")
 
 with left:
     if st.session_state.editing_id:
-        st.info("Edit korcho. Bodle Save dao, ba Remove diye batil koro.")
+        st.info("Editing a record. Press Save to update, or Remove to cancel.")
     st.text_input("Name", key="f_name")
     st.text_input("Number", key="f_number")
     st.text_input("ID", key="f_uid")
     st.text_input("TrnxID", key="f_trnx")
 
-    st.markdown(f"**Photo** (highest {MAX_IMAGES} ta)")
+    st.markdown(f"**Photo** (up to {MAX_IMAGES})")
     ver = st.session_state.ver
     up_files = st.file_uploader(
-        "Drag and drop kore dao, ba Browse files e tap koro",
+        "Drag and drop photos here, or click Browse files",
         type=["png", "jpg", "jpeg", "webp"],
         accept_multiple_files=True,
         key=f"up_{ver}",
@@ -267,7 +267,7 @@ with left:
     st.session_state.cur_up = up_files or []
 
     if paste is not None:
-        pasted = paste(label="📋 Clipboard theke paste koro", key=f"pp_{ver}")
+        pasted = paste(label="📋 Paste from clipboard", key=f"pp_{ver}")
         if pasted and isinstance(pasted, str) and "," in pasted:
             h = hashlib.md5(pasted.encode()).hexdigest()
             if h != st.session_state.last_paste_hash:
@@ -279,27 +279,27 @@ with left:
                 except Exception:
                     pass
     else:
-        st.caption("Paste button load hoy ni. Drag and drop ba Browse use koro.")
+        st.caption("Paste button could not load. Use drag and drop or Browse files.")
 
     exist_imgs = [base64.b64decode(b) for b in st.session_state.exist_b64]
     new_uploaded = uploaded_bytes()
     pasted_imgs = list(st.session_state.pasted_list)
 
     if exist_imgs:
-        st.caption("Ager save kora chhobi")
+        st.caption("Saved photos")
         image_grid(exist_imgs, "exist")
     if pasted_imgs:
-        st.caption("Paste kora notun chhobi")
+        st.caption("Pasted photos")
         image_grid(pasted_imgs, "paste")
     if new_uploaded:
-        st.caption("Upload kora notun chhobi (muchte upor-er list-er x tap koro)")
+        st.caption("Uploaded photos (use the x in the upload list above to remove)")
         image_grid(new_uploaded)
 
     n = total_images()
     if n > MAX_IMAGES:
-        st.warning(f"Mot {n} ta chhobi. Highest {MAX_IMAGES} ta dewa jay, {n - MAX_IMAGES} ta kombao.")
+        st.warning(f"Total {n} photos. Maximum is {MAX_IMAGES}, please remove {n - MAX_IMAGES}.")
     else:
-        st.caption(f"Chhobi: {n} / {MAX_IMAGES}")
+        st.caption(f"Photos: {n} / {MAX_IMAGES}")
 
     st.text_area("Problem", key="f_problem", height=220)
 
@@ -313,10 +313,10 @@ with right:
         records = fetch_records()
     except Exception as e:
         records = []
-        st.error(f"Saved list ana jay ni: {e}")
+        st.error(f"Could not load saved records: {e}")
 
     if not records:
-        st.caption("Ekhono kichu save kora nai.")
+        st.caption("Nothing saved yet.")
 
     for rec in records:
         with st.container(border=True):
