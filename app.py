@@ -1,5 +1,14 @@
+import base64
+import io
+
 import requests
 import streamlit as st
+from PIL import Image, ImageOps
+
+try:
+    from st_img_pastebutton import paste
+except Exception:  # package na thakle paste button hide thakbe
+    paste = None
 
 st.set_page_config(page_title="Records", page_icon="📋", layout="wide")
 
@@ -35,18 +44,46 @@ HEADERS = {
 if not SUPABASE_KEY.startswith("sb_"):  # purono (legacy) JWT key hole
     HEADERS["Authorization"] = f"Bearer {SUPABASE_KEY}"
 
+LIST_COLUMNS = "id,name,number,uid,trnx_id,problem,has_image"
+
 
 def api(method, params=None, json=None):
     r = requests.request(
-        method, TABLE_URL, headers=HEADERS, params=params, json=json, timeout=15
+        method, TABLE_URL, headers=HEADERS, params=params, json=json, timeout=20
     )
     r.raise_for_status()
     return r
 
 
 def fetch_records():
-    r = api("GET", params={"select": "*", "order": "id.desc"})
-    return r.json()
+    return api("GET", params={"select": LIST_COLUMNS, "order": "id.desc"}).json()
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_image(rid):
+    try:
+        rows = api("GET", params={"select": "image", "id": f"eq.{rid}"}).json()
+        b64 = rows[0].get("image") if rows else None
+        return base64.b64decode(b64) if b64 else None
+    except Exception:
+        return None
+
+
+def prepare_image(raw: bytes) -> str:
+    """Chhobi chhoto kore (max 1280px) JPEG banay, tarpor base64 text."""
+    img = Image.open(io.BytesIO(raw))
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    else:
+        img = img.convert("RGB")
+    img.thumbnail((1280, 1280))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=80, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 # ---------- Form state ----------
@@ -56,7 +93,12 @@ for k, v in (
     ("f_uid", ""),
     ("f_trnx", ""),
     ("f_problem", ""),
+    ("f_rmimg", False),
     ("editing_id", None),
+    ("editing_has_image", False),
+    ("ver", 0),
+    ("cur_up", None),
+    ("cur_paste", None),
 ):
     st.session_state.setdefault(k, v)
 
@@ -67,7 +109,27 @@ def clear_form():
     st.session_state.f_uid = ""
     st.session_state.f_trnx = ""
     st.session_state.f_problem = ""
+    st.session_state.f_rmimg = False
     st.session_state.editing_id = None
+    st.session_state.editing_has_image = False
+    st.session_state.cur_up = None
+    st.session_state.cur_paste = None
+    st.session_state.ver += 1  # uploader ar paste button reset
+
+
+def staged_image_bytes():
+    """Ekhon baachha/paste kora chhobi (thakle) bytes hishabe."""
+    ver = st.session_state.ver
+    up = st.session_state.get(f"up_{ver}") or st.session_state.cur_up
+    if up is not None:
+        return up.getvalue()
+    pasted = st.session_state.get(f"pp_{ver}") or st.session_state.cur_paste
+    if pasted and isinstance(pasted, str) and "," in pasted:
+        try:
+            return base64.b64decode(pasted.split(",", 1)[1])
+        except Exception:
+            return None
+    return None
 
 
 def save_record():
@@ -76,9 +138,12 @@ def save_record():
     uid = st.session_state.f_uid.strip()
     trnx = st.session_state.f_trnx.strip()
     problem = st.session_state.f_problem.strip()
-    if not (name or number or uid or trnx or problem):
+    raw = staged_image_bytes()
+
+    if not (name or number or uid or trnx or problem or raw):
         st.session_state.flash = ("warning", "Kichu likho, tarpor Save dao.")
         return
+
     payload = {
         "name": name,
         "number": number,
@@ -86,6 +151,17 @@ def save_record():
         "trnx_id": trnx,
         "problem": problem,
     }
+    if raw:
+        try:
+            payload["image"] = prepare_image(raw)
+            payload["has_image"] = True
+        except Exception:
+            st.session_state.flash = ("error", "Chhobi ta pora jay ni. Onno chhobi dao.")
+            return
+    elif st.session_state.editing_id and st.session_state.f_rmimg:
+        payload["image"] = None
+        payload["has_image"] = False
+
     try:
         if st.session_state.editing_id:
             api("PATCH", params={"id": f"eq.{st.session_state.editing_id}"}, json=payload)
@@ -96,17 +172,20 @@ def save_record():
     except Exception as e:
         st.session_state.flash = ("error", f"Save hoy ni: {e}")
         return
+    get_image.clear()
     clear_form()
     st.session_state.flash = ("success", msg)
 
 
 def start_edit(rec):
+    clear_form()
     st.session_state.f_name = rec.get("name") or ""
     st.session_state.f_number = rec.get("number") or ""
     st.session_state.f_uid = rec.get("uid") or ""
     st.session_state.f_trnx = rec.get("trnx_id") or ""
     st.session_state.f_problem = rec.get("problem") or ""
     st.session_state.editing_id = rec["id"]
+    st.session_state.editing_has_image = bool(rec.get("has_image"))
 
 
 def delete_record(rid):
@@ -115,6 +194,7 @@ def delete_record(rid):
     except Exception as e:
         st.session_state.flash = ("error", f"Delete hoy ni: {e}")
         return
+    get_image.clear()
     if st.session_state.editing_id == rid:
         clear_form()
 
@@ -136,6 +216,31 @@ with left:
     st.text_input("ID", key="f_uid")
     st.text_input("TrnxID", key="f_trnx")
     st.text_area("Problem", key="f_problem", height=220)
+
+    st.markdown("**Photo**")
+    ver = st.session_state.ver
+    up_file = st.file_uploader(
+        "Drag and drop kore dao, ba Browse files e tap koro",
+        type=["png", "jpg", "jpeg", "webp"],
+        key=f"up_{ver}",
+    )
+    pasted = None
+    if paste is not None:
+        pasted = paste(label="📋 Clipboard theke paste koro", key=f"pp_{ver}")
+    else:
+        st.caption("Paste button load hoy ni. Drag and drop ba Browse use koro.")
+
+    st.session_state.cur_up = up_file
+    st.session_state.cur_paste = pasted
+
+    preview = staged_image_bytes()
+    if preview:
+        st.image(preview, caption="Ei chhobi ta save hobe", use_container_width=True)
+    elif st.session_state.editing_id and st.session_state.editing_has_image:
+        current = get_image(st.session_state.editing_id)
+        if current and not st.session_state.f_rmimg:
+            st.image(current, caption="Ekhonkar chhobi", use_container_width=True)
+        st.checkbox("Ei chhobi ta muche dao", key="f_rmimg")
 
     b1, b2 = st.columns(2)
     b1.button("Save", type="primary", use_container_width=True, on_click=save_record)
@@ -161,6 +266,10 @@ with right:
                 )
             if rec.get("problem"):
                 st.text(rec["problem"])
+            if rec.get("has_image"):
+                img = get_image(rec["id"])
+                if img:
+                    st.image(img, use_container_width=True)
             e_col, d_col = st.columns(2)
             e_col.button(
                 "Edit",
