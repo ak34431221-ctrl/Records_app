@@ -779,7 +779,7 @@ def pay_delete(rid):
     pay_fetch.clear()
     if S.pay_editing_id == rid:
         pay_clear_form()
-    S.pay_flash = ("success", "Deleted from the app. A copy is kept in the database.")
+    S.pay_flash = ("success", "Deleted from the app.")
 
 
 def pay_file_text(rec):
