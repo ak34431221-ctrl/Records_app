@@ -677,10 +677,76 @@ def customer_tab():
 
 
 # =====================================================================
+# 5. PAYMENT (Notepad download)
+# =====================================================================
+PAY_KEYS = ["pay_name", "pay_id", "pay_datetime", "pay_bkash", "pay_nagad", "pay_cash"]
+
+for _k in PAY_KEYS:
+    S.setdefault(_k, "")
+
+
+def pay_remove_all():
+    for k in PAY_KEYS:
+        S[k] = ""
+    S.pop("pay_saved_text", None)
+    S.pop("pay_saved_name", None)
+
+
+def pay_build_text():
+    lines = [
+        f"Name : {S.pay_name.strip()}",
+        f"ID : {S.pay_id.strip()}",
+        f"Date and Time : {S.pay_datetime.strip()}",
+        f"Bkash : {S.pay_bkash.strip()}",
+        f"Nagad : {S.pay_nagad.strip()}",
+        f"Hand Cash Memo/Name : {S.pay_cash.strip()}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def payment_tab():
+    st.markdown("### Payment")
+
+    st.text_input("Name", key="pay_name")
+    st.text_input("ID", key="pay_id")
+    st.text_input("Date and Time", key="pay_datetime")
+
+    p1, p2, p3 = st.columns(3)
+    p1.text_input("Bkash", key="pay_bkash")
+    p2.text_input("Nagad", key="pay_nagad")
+    p3.text_input("Hand Cash Memo/Name", key="pay_cash")
+
+    b1, b2 = st.columns(2)
+    save_clicked = b1.button("Save", type="primary", use_container_width=True, key="pay_save")
+    b2.button("Remove all", on_click=pay_remove_all, use_container_width=True, key="pay_remove")
+
+    if save_clicked:
+        label = S.pay_name.strip() or S.pay_id.strip()
+        if not label:
+            st.warning("Please enter a name or ID before saving.")
+            S.pop("pay_saved_text", None)
+        else:
+            safe = re.sub(r'[\\/:*?"<>|]+', "_", label)
+            S.pay_saved_text = pay_build_text()
+            S.pay_saved_name = f"{safe}_payment.txt"
+
+    if S.get("pay_saved_text"):
+        st.success("Saved. Tap the button below to download the Notepad file.")
+        st.download_button(
+            "Download Notepad file (.txt)",
+            data=S.pay_saved_text.encode("utf-8-sig"),
+            file_name=S.pay_saved_name,
+            mime="text/plain",
+            use_container_width=True,
+            key="pay_download",
+        )
+
+
+# =====================================================================
 # MAIN: top tabs
 # =====================================================================
-tab_billing, tab_records, tab_olt, tab_customer = st.tabs(
-    ["Billing", "Records", "OLT Commands", "Customer Info"]
+tab_billing, tab_records, tab_olt, tab_customer, tab_payment = st.tabs(
+    ["Billing", "Records", "OLT Commands", "Customer Info", "Payment"]
 )
 
 with tab_billing:
@@ -697,3 +763,7 @@ with tab_olt:
 with tab_customer:
     with narrow():
         customer_tab()
+
+with tab_payment:
+    with narrow():
+        payment_tab()
