@@ -679,7 +679,15 @@ def customer_tab():
 # =====================================================================
 # 5. PAYMENT (Notepad download)
 # =====================================================================
-PAY_KEYS = ["pay_name", "pay_id", "pay_datetime", "pay_bkash", "pay_nagad", "pay_cash"]
+PAY_KEYS = [
+    "pay_name",
+    "pay_id",
+    "pay_datetime",
+    "pay_bkash",
+    "pay_nagad",
+    "pay_cash",
+    "pay_trnx",
+]
 
 for _k in PAY_KEYS:
     S.setdefault(_k, "")
@@ -700,6 +708,7 @@ def pay_build_text():
         f"Bkash : {S.pay_bkash.strip()}",
         f"Nagad : {S.pay_nagad.strip()}",
         f"Hand Cash Memo/Name : {S.pay_cash.strip()}",
+        f"TrnxID : {S.pay_trnx.strip()}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -715,6 +724,7 @@ def payment_tab():
     p1.text_input("Bkash", key="pay_bkash")
     p2.text_input("Nagad", key="pay_nagad")
     p3.text_input("Hand Cash Memo/Name", key="pay_cash")
+    st.text_input("TrnxID", key="pay_trnx")
 
     b1, b2 = st.columns(2)
     save_clicked = b1.button("Save", type="primary", use_container_width=True, key="pay_save")
