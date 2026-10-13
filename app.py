@@ -185,7 +185,6 @@ except Exception:
     SUPABASE_URL = SUPABASE_KEY = ""
     DB_OK = False
 
-TABLE_URL = f"{SUPABASE_URL}/rest/v1/records"
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Content-Type": "application/json",
@@ -197,9 +196,14 @@ if SUPABASE_KEY and not SUPABASE_KEY.startswith("sb_"):  # legacy JWT key
 LIST_COLUMNS = "id,name,number,uid,trnx_id,problem,image_count"
 
 
-def api(method, params=None, json=None):
+def api(method, params=None, json=None, table="records"):
     r = requests.request(
-        method, TABLE_URL, headers=HEADERS, params=params, json=json, timeout=30
+        method,
+        f"{SUPABASE_URL}/rest/v1/{table}",
+        headers=HEADERS,
+        params=params,
+        json=json,
+        timeout=30,
     )
     r.raise_for_status()
     return r
@@ -677,38 +681,116 @@ def customer_tab():
 
 
 # =====================================================================
-# 5. PAYMENT (Notepad download)
+# 5. PAYMENT (Supabase, table: payments)
 # =====================================================================
-PAY_KEYS = [
-    "pay_name",
-    "pay_id",
-    "pay_datetime",
-    "pay_bkash",
-    "pay_nagad",
-    "pay_cash",
-    "pay_trnx",
-]
+PAY_TABLE = "payments"
+PAY_COLUMNS = "id,name,uid,date_time,bkash,nagad,cash_memo,trnx_id"
 
-for _k in PAY_KEYS:
-    S.setdefault(_k, "")
-
-
-def pay_remove_all():
-    for k in PAY_KEYS:
-        S[k] = ""
-    S.pop("pay_saved_text", None)
-    S.pop("pay_saved_name", None)
+for _k, _v in (
+    ("pay_name", ""),
+    ("pay_id", ""),
+    ("pay_datetime", ""),
+    ("pay_bkash", ""),
+    ("pay_nagad", ""),
+    ("pay_cash", ""),
+    ("pay_trnx", ""),
+    ("pay_editing_id", None),
+):
+    S.setdefault(_k, _v)
 
 
-def pay_build_text():
+@st.cache_data(show_spinner=False, ttl=15)
+def pay_fetch():
+    # Payments marked as deleted stay in the database but are hidden here.
+    params = {
+        "select": PAY_COLUMNS,
+        "order": "id.desc",
+        "or": "(deleted.eq.false,deleted.is.null)",
+    }
+    return api("GET", params=params, table=PAY_TABLE).json()
+
+
+def pay_clear_form():
+    S.pay_name = ""
+    S.pay_id = ""
+    S.pay_datetime = ""
+    S.pay_bkash = ""
+    S.pay_nagad = ""
+    S.pay_cash = ""
+    S.pay_trnx = ""
+    S.pay_editing_id = None
+
+
+def pay_save():
+    values = {
+        "name": S.pay_name.strip(),
+        "uid": S.pay_id.strip(),
+        "date_time": S.pay_datetime.strip(),
+        "bkash": S.pay_bkash.strip(),
+        "nagad": S.pay_nagad.strip(),
+        "cash_memo": S.pay_cash.strip(),
+        "trnx_id": S.pay_trnx.strip(),
+    }
+    if not any(values.values()):
+        S.pay_flash = ("warning", "Please fill in something before saving.")
+        return
+    try:
+        if S.pay_editing_id:
+            api("PATCH", params={"id": f"eq.{S.pay_editing_id}"}, json=values, table=PAY_TABLE)
+            msg = "Updated."
+        else:
+            api("POST", json=values, table=PAY_TABLE)
+            msg = "Saved."
+    except Exception as e:
+        S.pay_flash = ("error", f"Could not save: {e}")
+        return
+    pay_fetch.clear()
+    pay_clear_form()
+    S.pay_flash = ("success", msg)
+
+
+def pay_start_edit(rec):
+    pay_clear_form()
+    S.pay_name = rec.get("name") or ""
+    S.pay_id = rec.get("uid") or ""
+    S.pay_datetime = rec.get("date_time") or ""
+    S.pay_bkash = rec.get("bkash") or ""
+    S.pay_nagad = rec.get("nagad") or ""
+    S.pay_cash = rec.get("cash_memo") or ""
+    S.pay_trnx = rec.get("trnx_id") or ""
+    S.pay_editing_id = rec["id"]
+
+
+def pay_delete(rid):
+    """Soft delete: hide from the app, but keep the row in the database."""
+    try:
+        api(
+            "PATCH",
+            params={"id": f"eq.{rid}"},
+            json={
+                "deleted": True,
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+            },
+            table=PAY_TABLE,
+        )
+    except Exception as e:
+        S.pay_flash = ("error", f"Could not delete: {e}")
+        return
+    pay_fetch.clear()
+    if S.pay_editing_id == rid:
+        pay_clear_form()
+    S.pay_flash = ("success", "Deleted from the app. A copy is kept in the database.")
+
+
+def pay_file_text(rec):
     lines = [
-        f"Name : {S.pay_name.strip()}",
-        f"ID : {S.pay_id.strip()}",
-        f"Date and Time : {S.pay_datetime.strip()}",
-        f"Bkash : {S.pay_bkash.strip()}",
-        f"Nagad : {S.pay_nagad.strip()}",
-        f"Hand Cash Memo/Name : {S.pay_cash.strip()}",
-        f"TrnxID : {S.pay_trnx.strip()}",
+        f"Name : {rec.get('name') or ''}",
+        f"ID : {rec.get('uid') or ''}",
+        f"Date and Time : {rec.get('date_time') or ''}",
+        f"Bkash : {rec.get('bkash') or ''}",
+        f"Nagad : {rec.get('nagad') or ''}",
+        f"Hand Cash Memo/Name : {rec.get('cash_memo') or ''}",
+        f"TrnxID : {rec.get('trnx_id') or ''}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -716,40 +798,84 @@ def pay_build_text():
 def payment_tab():
     st.markdown("### Payment")
 
-    st.text_input("Name", key="pay_name")
-    st.text_input("ID", key="pay_id")
-    st.text_input("Date and Time", key="pay_datetime")
-
-    p1, p2, p3 = st.columns(3)
-    p1.text_input("Bkash", key="pay_bkash")
-    p2.text_input("Nagad", key="pay_nagad")
-    p3.text_input("Hand Cash Memo/Name", key="pay_cash")
-    st.text_input("TrnxID", key="pay_trnx")
-
-    b1, b2 = st.columns(2)
-    save_clicked = b1.button("Save", type="primary", use_container_width=True, key="pay_save")
-    b2.button("Remove all", on_click=pay_remove_all, use_container_width=True, key="pay_remove")
-
-    if save_clicked:
-        label = S.pay_name.strip() or S.pay_id.strip()
-        if not label:
-            st.warning("Please enter a name or ID before saving.")
-            S.pop("pay_saved_text", None)
-        else:
-            safe = re.sub(r'[\\/:*?"<>|]+', "_", label)
-            S.pay_saved_text = pay_build_text()
-            S.pay_saved_name = f"{safe}_payment.txt"
-
-    if S.get("pay_saved_text"):
-        st.success("Saved. Tap the button below to download the Notepad file.")
-        st.download_button(
-            "Download Notepad file (.txt)",
-            data=S.pay_saved_text.encode("utf-8-sig"),
-            file_name=S.pay_saved_name,
-            mime="text/plain",
-            use_container_width=True,
-            key="pay_download",
+    if not DB_OK:
+        st.error(
+            "Could not connect to the database. Add SUPABASE_URL and SUPABASE_KEY "
+            "in the Streamlit app Settings > Secrets."
         )
+        return
+
+    flash = S.pop("pay_flash", None)
+    if flash:
+        getattr(st, flash[0])(flash[1])
+
+    left, right = st.columns([1, 1], gap="large")
+
+    with left:
+        if S.pay_editing_id:
+            st.info("Editing a payment. Press Save to update, or Remove all to cancel.")
+        st.text_input("Name", key="pay_name")
+        st.text_input("ID", key="pay_id")
+        st.text_input("Date and Time", key="pay_datetime")
+
+        p1, p2, p3 = st.columns(3)
+        p1.text_input("Bkash", key="pay_bkash")
+        p2.text_input("Nagad", key="pay_nagad")
+        p3.text_input("Hand Cash Memo/Name", key="pay_cash")
+        st.text_input("TrnxID", key="pay_trnx")
+
+        b1, b2 = st.columns(2)
+        b1.button("Save", type="primary", use_container_width=True, on_click=pay_save, key="pay_save")
+        b2.button("Remove all", use_container_width=True, on_click=pay_clear_form, key="pay_remove")
+
+    with right:
+        st.markdown("**Saved**")
+        try:
+            rows = pay_fetch()
+        except Exception as e:
+            rows = []
+            st.error(f"Could not load saved payments: {e}")
+
+        if not rows:
+            st.caption("Nothing saved yet.")
+
+        for rec in rows:
+            with st.container(border=True):
+                st.markdown(f"**{rec.get('name') or '-'}**  ·  ID: {rec.get('uid') or '-'}")
+                if rec.get("date_time"):
+                    st.caption(rec["date_time"])
+                for label, key in (
+                    ("Bkash", "bkash"),
+                    ("Nagad", "nagad"),
+                    ("Hand Cash Memo/Name", "cash_memo"),
+                    ("TrnxID", "trnx_id"),
+                ):
+                    if rec.get(key):
+                        st.text(f"{label}: {rec[key]}")
+                safe = re.sub(r'[\\/:*?"<>|]+', "_", rec.get("name") or rec.get("uid") or "payment")
+                e_col, d_col, n_col = st.columns(3)
+                e_col.button(
+                    "Edit",
+                    key=f"pay_edit_{rec['id']}",
+                    use_container_width=True,
+                    on_click=pay_start_edit,
+                    args=(rec,),
+                )
+                d_col.button(
+                    "Delete",
+                    key=f"pay_del_{rec['id']}",
+                    use_container_width=True,
+                    on_click=pay_delete,
+                    args=(rec["id"],),
+                )
+                n_col.download_button(
+                    "Notepad",
+                    data=pay_file_text(rec).encode("utf-8-sig"),
+                    file_name=f"{safe}_payment.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    key=f"pay_dl_{rec['id']}",
+                )
 
 
 # =====================================================================
@@ -775,5 +901,4 @@ with tab_customer:
         customer_tab()
 
 with tab_payment:
-    with narrow():
-        payment_tab()
+    payment_tab()
