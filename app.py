@@ -779,7 +779,7 @@ def pay_delete(rid):
     pay_fetch.clear()
     if S.pay_editing_id == rid:
         pay_clear_form()
-    S.pay_flash = ("success", "Deleted from the app.")
+    S.pay_flash = ("success", "Deleted from the app. A copy is kept in the database.")
 
 
 def pay_file_text(rec):
@@ -879,11 +879,164 @@ def payment_tab():
 
 
 # =====================================================================
+# 0. NOTES (Supabase, table: notes)
+# =====================================================================
+NOTE_TABLE = "notes"
+NOTE_COLUMNS = "id,content,created_at"
+
+S.setdefault("nt_text", "")
+S.setdefault("nt_editing_id", None)
+
+
+def nt_time(iso):
+    """Shows the saved time in Bangladesh time, e.g. 12 Oct 2026, 3:45 PM."""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        try:
+            from zoneinfo import ZoneInfo
+            dt = dt.astimezone(ZoneInfo("Asia/Dhaka"))
+        except Exception:
+            pass
+        return f"{dt.day} {dt.strftime('%b %Y')}, {int(dt.strftime('%I'))}:{dt.strftime('%M %p')}"
+    except Exception:
+        return ""
+
+
+@st.cache_data(show_spinner=False, ttl=15)
+def nt_fetch():
+    # Notes marked as deleted stay in the database but are hidden here.
+    params = {
+        "select": NOTE_COLUMNS,
+        "order": "id.desc",
+        "or": "(deleted.eq.false,deleted.is.null)",
+    }
+    return api("GET", params=params, table=NOTE_TABLE).json()
+
+
+def nt_clear():
+    S.nt_text = ""
+    S.nt_editing_id = None
+
+
+def nt_save():
+    text = S.nt_text.strip()
+    if not text:
+        S.nt_flash = ("warning", "Write something before saving.")
+        return
+    try:
+        if S.nt_editing_id:
+            api("PATCH", params={"id": f"eq.{S.nt_editing_id}"}, json={"content": text}, table=NOTE_TABLE)
+            msg = "Updated."
+        else:
+            api("POST", json={"content": text}, table=NOTE_TABLE)
+            msg = "Saved."
+    except Exception as e:
+        S.nt_flash = ("error", f"Could not save: {e}")
+        return
+    nt_fetch.clear()
+    nt_clear()
+    S.nt_flash = ("success", msg)
+
+
+def nt_start_edit(rec):
+    nt_clear()
+    S.nt_text = rec.get("content") or ""
+    S.nt_editing_id = rec["id"]
+
+
+def nt_delete(rid):
+    """Soft delete: hide from the app, but keep the row in the database."""
+    try:
+        api(
+            "PATCH",
+            params={"id": f"eq.{rid}"},
+            json={
+                "deleted": True,
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+            },
+            table=NOTE_TABLE,
+        )
+    except Exception as e:
+        S.nt_flash = ("error", f"Could not delete: {e}")
+        return
+    nt_fetch.clear()
+    if S.nt_editing_id == rid:
+        nt_clear()
+    S.nt_flash = ("success", "Deleted from the app. A copy is kept in the database.")
+
+
+def notes_tab():
+    st.markdown("### Notes")
+
+    if not DB_OK:
+        st.error(
+            "Could not connect to the database. Add SUPABASE_URL and SUPABASE_KEY "
+            "in the Streamlit app Settings > Secrets."
+        )
+        return
+
+    flash = S.pop("nt_flash", None)
+    if flash:
+        getattr(st, flash[0])(flash[1])
+
+    left, right = st.columns([1, 1], gap="large")
+
+    with left:
+        if S.nt_editing_id:
+            st.info("Editing a note. Press Save to update, or Remove all to cancel.")
+        st.text_area(
+            "Note",
+            key="nt_text",
+            height=260,
+            placeholder="Write your note here. Drag the bottom-right corner of the box to make it bigger or smaller.",
+        )
+        b1, b2 = st.columns(2)
+        b1.button("Save", type="primary", use_container_width=True, on_click=nt_save, key="nt_save")
+        b2.button("Remove all", use_container_width=True, on_click=nt_clear, key="nt_remove")
+
+    with right:
+        st.markdown("**Saved**")
+        try:
+            rows = nt_fetch()
+        except Exception as e:
+            rows = []
+            st.error(f"Could not load saved notes: {e}")
+
+        if not rows:
+            st.caption("Nothing saved yet.")
+
+        for rec in rows:
+            with st.container(border=True):
+                when = nt_time(rec.get("created_at") or "")
+                if when:
+                    st.caption(when)
+                st.text(rec.get("content") or "")
+                e_col, d_col = st.columns(2)
+                e_col.button(
+                    "Edit",
+                    key=f"nt_edit_{rec['id']}",
+                    use_container_width=True,
+                    on_click=nt_start_edit,
+                    args=(rec,),
+                )
+                d_col.button(
+                    "Delete",
+                    key=f"nt_del_{rec['id']}",
+                    use_container_width=True,
+                    on_click=nt_delete,
+                    args=(rec["id"],),
+                )
+
+
+# =====================================================================
 # MAIN: top tabs
 # =====================================================================
-tab_billing, tab_records, tab_olt, tab_customer, tab_payment = st.tabs(
-    ["Billing", "Records", "OLT Commands", "Customer Info", "Payment"]
+tab_notes, tab_billing, tab_records, tab_olt, tab_customer, tab_payment = st.tabs(
+    ["Notes", "Billing", "Records", "OLT Commands", "Customer Info", "Payment"]
 )
+
+with tab_notes:
+    notes_tab()
 
 with tab_billing:
     with narrow():
