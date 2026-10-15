@@ -578,6 +578,7 @@ def olt_tab():
             ("Find Onu (Router MAC)", f"show mac address-table | include {last4 or '<Router MAC>'}"),
             ("Onu Info", f"show gpon interface gpon 0/{pon}:{onu} onu basic-info"),
             ("Onu Power", f"show gpon interface gpon 0/{pon}:{onu} onu optical-transceiver-diagnosis"),
+            ("Onu Power check in PON", f"show gpon onu-optical-transceiver-diagnosis interface gpon 0/{pon}"),
             ("Check Port", f"show gpon interface gpon 0/{pon}:{onu} onu port 1 state"),
             ("Reboot", f"gpon reboot onu interface gpon 0/{pon}:{onu}"),
             ("Mac Address Show", f"show mac address-table interface gpon 0/{pon}:{onu}"),
@@ -962,7 +963,7 @@ def nt_delete(rid):
     nt_fetch.clear()
     if S.nt_editing_id == rid:
         nt_clear()
-    S.nt_flash = ("success", "Deleted from the app.")
+    S.nt_flash = ("success", "Deleted from the app. A copy is kept in the database.")
 
 
 def notes_tab():
@@ -988,7 +989,7 @@ def notes_tab():
             "Note",
             key="nt_text",
             height=260,
-            placeholder="Write your note here.",
+            placeholder="Write your note here. Drag the bottom-right corner of the box to make it bigger or smaller.",
         )
         b1, b2 = st.columns(2)
         b1.button("Save", type="primary", use_container_width=True, on_click=nt_save, key="nt_save")
