@@ -789,7 +789,7 @@ def cu_delete(rid):
     cu_fetch.clear()
     if S.cu_editing_id == rid:
         cu_clear()
-    S.cu_flash = ("success", "Deleted from the app. A copy is kept in the database.")
+    S.cu_flash = ("success", "Deleted from the app.")
 
 
 def cu_file_text(rec):
