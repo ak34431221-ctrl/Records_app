@@ -1177,7 +1177,7 @@ def notes_tab():
             "Note",
             key="nt_text",
             height=260,
-            placeholder="Write your note here. Drag the bottom-right corner of the box to make it bigger or smaller.",
+            placeholder="Write your note here.",
         )
         b1, b2 = st.columns(2)
         b1.button("Save", type="primary", use_container_width=True, on_click=nt_save, key="nt_save")
