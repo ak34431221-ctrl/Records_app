@@ -525,10 +525,101 @@ def olt_clean(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
+COPY_HTML = """
+<style>
+  body {margin:0; font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;
+        color:#1f2937; background:transparent;}
+  .item {margin:0 0 12px;}
+  .lbl {font-size:13px; color:#6b7280; margin:0 0 4px;}
+  .box {display:flex; gap:8px; align-items:flex-start; background:#ffffff;
+        border:1px solid #eef0f3; border-radius:12px; padding:10px 12px;}
+  .cmd {flex:1; margin:0; font-family:ui-monospace,Consolas,"Courier New",monospace;
+        font-size:13px; line-height:19px; white-space:pre-wrap; word-break:break-all;
+        color:#1f2937;}
+  button {flex:none; border:1px solid #e3e7ee; background:#f7f9fc; border-radius:8px;
+          padding:4px 10px; font-size:12px; cursor:pointer; color:#4b5563;}
+  button.ok {background:#4f7cff; border-color:#4f7cff; color:#ffffff;}
+</style>
+<div id="root"></div>
+<script>
+  const ITEMS = __ITEMS__;
+
+  function selectText(el) {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    const s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  }
+
+  function legacyCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  async function doCopy(text, el, btn) {
+    let ok = legacyCopy(text);                       // works in most embedded windows
+    if (!ok) {
+      try {
+        if (navigator.clipboard) { await navigator.clipboard.writeText(text); ok = true; }
+      } catch (e) {}
+    }
+    if (!ok) { selectText(el); }                     // last resort: select, then Ctrl+C
+    btn.textContent = ok ? "Copied" : "Press Ctrl+C";
+    btn.classList.toggle("ok", ok);
+    setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("ok"); }, 1600);
+  }
+
+  const root = document.getElementById("root");
+  ITEMS.forEach(([name, cmd]) => {
+    const item = document.createElement("div");
+    item.className = "item";
+    const lbl = document.createElement("div");
+    lbl.className = "lbl";
+    lbl.textContent = name;
+    const box = document.createElement("div");
+    box.className = "box";
+    const pre = document.createElement("pre");
+    pre.className = "cmd";
+    pre.textContent = cmd;
+    const btn = document.createElement("button");
+    btn.textContent = "Copy";
+    btn.addEventListener("click", () => doCopy(cmd, pre, btn));
+    box.appendChild(pre);
+    box.appendChild(btn);
+    item.appendChild(lbl);
+    item.appendChild(box);
+    root.appendChild(item);
+  });
+</script>
+"""
+
+
 def olt_show(items):
-    for name, cmd in items:
-        st.markdown(f'<div class="label">{name}</div>', unsafe_allow_html=True)
-        st.code(cmd, language="bash", wrap_lines=True)
+    """Command list with a Copy button that also works inside embedded windows."""
+    try:
+        import json
+        import streamlit.components.v1 as components
+
+        data = json.dumps(items).replace("</", "<\\/")
+        height = 12
+        for _, cmd in items:
+            lines = sum(max(1, math.ceil(len(line) / 44)) for line in cmd.split("\n"))
+            height += 17 + 4 + lines * 19 + 22 + 12
+        components.html(COPY_HTML.replace("__ITEMS__", data), height=height, scrolling=False)
+    except Exception:
+        for name, cmd in items:
+            st.markdown(f'<div class="label">{name}</div>', unsafe_allow_html=True)
+            st.code(cmd, language="bash", wrap_lines=True)
 
 
 S.setdefault("olt_rmac_b", "")
@@ -613,72 +704,169 @@ def olt_tab():
 
 
 # =====================================================================
-# 4. CUSTOMER INFO (Notepad download)
+# 4. CUSTOMER INFO (Supabase, table: customers)
 # =====================================================================
+CU_TABLE = "customers"
+# (label, session/widget key, database column)
 CU_FIELDS = [
-    ("Name", "cu_name"),
-    ("Contact", "cu_contact"),
-    ("Building Name", "cu_building"),
-    ("Floor", "cu_floor"),
-    ("Road Name", "cu_road_name"),
-    ("Road Number", "cu_road_no"),
-    ("Block/Sector", "cu_block"),
-    ("Area", "cu_area"),
+    ("Name", "cu_name", "name"),
+    ("Contact", "cu_contact", "contact"),
+    ("Building Name", "cu_building", "building"),
+    ("Building Number", "cu_building_no", "building_no"),
+    ("Floor", "cu_floor", "floor"),
+    ("Road Name", "cu_road_name", "road_name"),
+    ("Road Number", "cu_road_no", "road_no"),
+    ("Block/Sector", "cu_block", "block"),
+    ("Area", "cu_area", "area"),
+    ("Details Billing Info", "cu_billing", "billing"),
 ]
-CU_BILLING_KEY = "cu_billing"
-CU_ALL_KEYS = [k for _, k in CU_FIELDS] + [CU_BILLING_KEY]
+CU_COLUMNS = "id," + ",".join(col for _, _, col in CU_FIELDS)
 
-for _k in CU_ALL_KEYS:
-    S.setdefault(_k, "")
-
-
-def cu_remove_all():
-    for k in CU_ALL_KEYS:
-        S[k] = ""
-    S.pop("cu_saved_text", None)
-    S.pop("cu_saved_name", None)
+for _label, _key, _col in CU_FIELDS:
+    S.setdefault(_key, "")
+S.setdefault("cu_editing_id", None)
 
 
-def cu_build_text():
-    lines = [f"{label} : {S[key].strip()}" for label, key in CU_FIELDS]
-    lines.append(f"Details Billing Info : {S[CU_BILLING_KEY].strip()}")
+@st.cache_data(show_spinner=False, ttl=15)
+def cu_fetch():
+    # Customers marked as deleted stay in the database but are hidden here.
+    params = {
+        "select": CU_COLUMNS,
+        "order": "id.desc",
+        "or": "(deleted.eq.false,deleted.is.null)",
+    }
+    return api("GET", params=params, table=CU_TABLE).json()
+
+
+def cu_clear():
+    for _, key, _ in CU_FIELDS:
+        S[key] = ""
+    S.cu_editing_id = None
+
+
+def cu_save():
+    values = {col: S[key].strip() for _, key, col in CU_FIELDS}
+    if not any(values.values()):
+        S.cu_flash = ("warning", "Please fill in something before saving.")
+        return
+    try:
+        if S.cu_editing_id:
+            api("PATCH", params={"id": f"eq.{S.cu_editing_id}"}, json=values, table=CU_TABLE)
+            msg = "Updated."
+        else:
+            api("POST", json=values, table=CU_TABLE)
+            msg = "Saved."
+    except Exception as e:
+        S.cu_flash = ("error", f"Could not save: {e}")
+        return
+    cu_fetch.clear()
+    cu_clear()
+    S.cu_flash = ("success", msg)
+
+
+def cu_start_edit(rec):
+    cu_clear()
+    for _, key, col in CU_FIELDS:
+        S[key] = rec.get(col) or ""
+    S.cu_editing_id = rec["id"]
+
+
+def cu_delete(rid):
+    """Soft delete: hide from the app, but keep the row in the database."""
+    try:
+        api(
+            "PATCH",
+            params={"id": f"eq.{rid}"},
+            json={
+                "deleted": True,
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+            },
+            table=CU_TABLE,
+        )
+    except Exception as e:
+        S.cu_flash = ("error", f"Could not delete: {e}")
+        return
+    cu_fetch.clear()
+    if S.cu_editing_id == rid:
+        cu_clear()
+    S.cu_flash = ("success", "Deleted from the app. A copy is kept in the database.")
+
+
+def cu_file_text(rec):
+    lines = [f"{label} : {rec.get(col) or ''}" for label, _, col in CU_FIELDS]
     return "\n".join(lines) + "\n"
 
 
 def customer_tab():
     st.markdown("### Customer Info")
 
-    for label, key in CU_FIELDS:
-        if key == "cu_area":
-            st.text_area(label, key=key, height=130)
-        else:
-            st.text_input(label, key=key)
-    st.text_area("Details Billing Info", key=CU_BILLING_KEY, height=130)
-
-    c1, c2 = st.columns(2)
-    save_clicked = c1.button("Save", type="primary", use_container_width=True, key="cu_save")
-    c2.button("Remove all", on_click=cu_remove_all, use_container_width=True, key="cu_remove")
-
-    if save_clicked:
-        name = S["cu_name"].strip()
-        if not name:
-            st.warning("Please enter a name before saving.")
-            S.pop("cu_saved_text", None)
-        else:
-            safe = re.sub(r'[\\/:*?"<>|]+', "_", name)
-            S.cu_saved_text = cu_build_text()
-            S.cu_saved_name = f"{safe}.txt"
-
-    if S.get("cu_saved_text"):
-        st.success("Saved. Tap the button below to download the Notepad file.")
-        st.download_button(
-            "Download Notepad file (.txt)",
-            data=S.cu_saved_text.encode("utf-8-sig"),
-            file_name=S.cu_saved_name,
-            mime="text/plain",
-            use_container_width=True,
-            key="cu_download",
+    if not DB_OK:
+        st.error(
+            "Could not connect to the database. Add SUPABASE_URL and SUPABASE_KEY "
+            "in the Streamlit app Settings > Secrets."
         )
+        return
+
+    flash = S.pop("cu_flash", None)
+    if flash:
+        getattr(st, flash[0])(flash[1])
+
+    left, right = st.columns([1, 1], gap="large")
+
+    with left:
+        if S.cu_editing_id:
+            st.info("Editing a customer. Press Save to update, or Remove all to cancel.")
+        for label, key, _ in CU_FIELDS:
+            if key in ("cu_area", "cu_billing"):
+                st.text_area(label, key=key, height=130)
+            else:
+                st.text_input(label, key=key)
+
+        b1, b2 = st.columns(2)
+        b1.button("Save", type="primary", use_container_width=True, on_click=cu_save, key="cu_save")
+        b2.button("Remove all", use_container_width=True, on_click=cu_clear, key="cu_remove")
+
+    with right:
+        st.markdown("**Saved**")
+        try:
+            rows = cu_fetch()
+        except Exception as e:
+            rows = []
+            st.error(f"Could not load saved customers: {e}")
+
+        if not rows:
+            st.caption("Nothing saved yet.")
+
+        for rec in rows:
+            with st.container(border=True):
+                st.markdown(f"**{rec.get('name') or '-'}**  ·  {rec.get('contact') or '-'}")
+                for label, _, col in CU_FIELDS[2:]:
+                    if rec.get(col):
+                        st.text(f"{label}: {rec[col]}")
+                safe = re.sub(r'[\\/:*?"<>|]+', "_", rec.get("name") or rec.get("contact") or "customer")
+                e_col, d_col, n_col = st.columns(3)
+                e_col.button(
+                    "Edit",
+                    key=f"cu_edit_{rec['id']}",
+                    use_container_width=True,
+                    on_click=cu_start_edit,
+                    args=(rec,),
+                )
+                d_col.button(
+                    "Delete",
+                    key=f"cu_del_{rec['id']}",
+                    use_container_width=True,
+                    on_click=cu_delete,
+                    args=(rec["id"],),
+                )
+                n_col.download_button(
+                    "Notepad",
+                    data=cu_file_text(rec).encode("utf-8-sig"),
+                    file_name=f"{safe}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    key=f"cu_dl_{rec['id']}",
+                )
 
 
 # =====================================================================
@@ -963,7 +1151,7 @@ def nt_delete(rid):
     nt_fetch.clear()
     if S.nt_editing_id == rid:
         nt_clear()
-    S.nt_flash = ("success", "Deleted from the app.")
+    S.nt_flash = ("success", "Deleted from the app. A copy is kept in the database.")
 
 
 def notes_tab():
@@ -989,7 +1177,7 @@ def notes_tab():
             "Note",
             key="nt_text",
             height=260,
-            placeholder="Write your note here.",
+            placeholder="Write your note here. Drag the bottom-right corner of the box to make it bigger or smaller.",
         )
         b1, b2 = st.columns(2)
         b1.button("Save", type="primary", use_container_width=True, on_click=nt_save, key="nt_save")
@@ -1051,8 +1239,7 @@ with tab_olt:
         olt_tab()
 
 with tab_customer:
-    with narrow():
-        customer_tab()
+    customer_tab()
 
 with tab_payment:
     payment_tab()
