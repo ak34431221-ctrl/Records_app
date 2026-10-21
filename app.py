@@ -690,8 +690,7 @@ def olt_tab():
         olt_show([
             ("Find Onu (ONU MAC)", f"display ont info by-sn {h_sn or '<ONU MAC>'}"),
             ("Find Onu (Router MAC)", f"display location {huawei_mac or '<Router MAC>'}"),
-            ("Onu Info", f"display ont info {pon} {onu}"),
-            ("Onu Optical Info", f"display ont optical-info {pon} {onu}"),
+            ("Onu Info", f"display ont optical-info {pon} {onu}"),
             ("Reset", f"ont reset {pon} {onu}"),
             ("Onu All Power", f"display ont optical-info history rx {pon} {onu}"),
             ("Total Inactive Onu in PON", f"display ont info summary {pon}"),
@@ -702,6 +701,128 @@ def olt_tab():
                 f"quit\ninterface gpon 0/{slot}\ndisplay ont port state {pon} {onu} eth-port all",
             ),
         ])
+
+
+# =====================================================================
+# 3b. CHECKLIST (runs in the browser, nothing is saved)
+# =====================================================================
+CHECK_ITEMS = [
+    "Onu and Router Light",
+    "Onu Status",
+    "Power",
+    "Router Mac",
+    "Port up/down",
+    "ERP Login Success or failed",
+    "Mikrotic Bandwidth",
+    "Mikrotic PPP",
+]
+
+CHECK_HTML = """
+<style>
+  * {box-sizing: border-box;}
+  body {margin:0; font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;
+        color:#1f2937; background:transparent;}
+  .row {display:grid; grid-template-columns:34px 34px minmax(0,1fr) minmax(0,1fr);
+        gap:6px; align-items:stretch; margin:0 0 8px;}
+  .ic {width:34px; min-height:38px; border:1px solid #e3e7ee; background:#ffffff;
+       border-radius:8px; cursor:pointer; padding:0; display:flex;
+       align-items:center; justify-content:center;}
+  .ic svg {width:18px; height:18px; stroke:#9ca3af; fill:none; stroke-width:3;
+           stroke-linecap:round; stroke-linejoin:round;}
+  .ic.ok.on {background:#22c55e; border-color:#22c55e;}
+  .ic.no.on {background:#ef4444; border-color:#ef4444;}
+  .ic.on svg {stroke:#ffffff;}
+  .head {border-radius:8px; padding:8px 10px; font-size:14px; font-weight:600;
+         color:#ffffff; display:flex; align-items:center; line-height:1.2;
+         word-break:break-word;}
+  .head.red {background:#ef4444;}
+  .head.green {background:#22c55e;}
+  input {width:100%; min-width:0; border:1px solid transparent; background:#eef2f8;
+         border-radius:8px; padding:8px 10px; font-size:14px; color:#1f2937;
+         font-family:inherit; outline:none;}
+  input:focus {border-color:#4f7cff; background:#ffffff;}
+  .clear {margin-top:4px; width:100%; border:1px solid #e3e7ee; background:#ffffff;
+          border-radius:8px; padding:8px; font-size:14px; color:#4b5563; cursor:pointer;}
+  @media (max-width: 340px) {
+    .row {grid-template-columns:34px 34px minmax(0,1fr);}
+    .row input {grid-column: 1 / -1;}
+  }
+</style>
+<div id="list"></div>
+<button class="clear" id="clear">Clear all</button>
+<script>
+  const ITEMS = __ITEMS__;
+  const CHECK = '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg>';
+  const CROSS = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  const list = document.getElementById("list");
+  const rows = [];
+
+  function setState(row, ok) {
+    row.head.classList.toggle("green", ok);
+    row.head.classList.toggle("red", !ok);
+    row.okBtn.classList.toggle("on", ok);
+    row.noBtn.classList.toggle("on", !ok);
+  }
+
+  ITEMS.forEach(function (name) {
+    const wrap = document.createElement("div");
+    wrap.className = "row";
+
+    const okBtn = document.createElement("button");
+    okBtn.className = "ic ok";
+    okBtn.title = "OK";
+    okBtn.innerHTML = CHECK;
+
+    const noBtn = document.createElement("button");
+    noBtn.className = "ic no";
+    noBtn.title = "Not OK";
+    noBtn.innerHTML = CROSS;
+
+    const head = document.createElement("div");
+    head.className = "head red";
+    head.textContent = name;
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.setAttribute("aria-label", name);
+    input.autocomplete = "off";
+
+    const row = { okBtn: okBtn, noBtn: noBtn, head: head, input: input };
+    okBtn.addEventListener("click", function () { setState(row, true); });
+    noBtn.addEventListener("click", function () { setState(row, false); });
+    setState(row, false);               // red until you tick it
+
+    wrap.appendChild(okBtn);
+    wrap.appendChild(noBtn);
+    wrap.appendChild(head);
+    wrap.appendChild(input);
+    list.appendChild(wrap);
+    rows.push(row);
+  });
+
+  document.getElementById("clear").addEventListener("click", function () {
+    rows.forEach(function (r) { setState(r, false); r.input.value = ""; });
+  });
+
+  // Make the frame exactly as tall as the content (when the browser allows it).
+  function fit() {
+    try { window.frameElement.style.height = (document.documentElement.scrollHeight + 4) + "px"; }
+    catch (e) {}
+  }
+  fit();
+  window.addEventListener("resize", fit);
+  if (window.ResizeObserver) { new ResizeObserver(fit).observe(document.body); }
+</script>
+"""
+
+
+def checklist_tab():
+    import json
+    import streamlit.components.v1 as components
+
+    st.markdown("### Checklist")
+    html = CHECK_HTML.replace("__ITEMS__", json.dumps(CHECK_ITEMS).replace("</", "<\\/"))
+    components.html(html, height=len(CHECK_ITEMS) * 54 + 70, scrolling=True)
 
 
 # =====================================================================
@@ -790,7 +911,7 @@ def cu_delete(rid):
     cu_fetch.clear()
     if S.cu_editing_id == rid:
         cu_clear()
-    S.cu_flash = ("success", "Deleted from the app.")
+    S.cu_flash = ("success", "Deleted from the app. A copy is kept in the database.")
 
 
 def cu_file_text(rec):
@@ -1178,7 +1299,7 @@ def notes_tab():
             "Note",
             key="nt_text",
             height=260,
-            placeholder="Write your note here.",
+            placeholder="Write your note here. Drag the bottom-right corner of the box to make it bigger or smaller.",
         )
         b1, b2 = st.columns(2)
         b1.button("Save", type="primary", use_container_width=True, on_click=nt_save, key="nt_save")
@@ -1221,8 +1342,8 @@ def notes_tab():
 # =====================================================================
 # MAIN: top tabs
 # =====================================================================
-tab_notes, tab_billing, tab_records, tab_olt, tab_customer, tab_payment = st.tabs(
-    ["Notes", "Billing", "Records", "OLT Commands", "Customer Info", "Payment"]
+tab_notes, tab_billing, tab_records, tab_olt, tab_check, tab_customer, tab_payment = st.tabs(
+    ["Notes", "Billing", "Records", "OLT Commands", "Checklist", "Customer Info", "Payment"]
 )
 
 with tab_notes:
@@ -1238,6 +1359,10 @@ with tab_records:
 with tab_olt:
     with narrow():
         olt_tab()
+
+with tab_check:
+    with narrow():
+        checklist_tab()
 
 with tab_customer:
     customer_tab()
