@@ -764,7 +764,18 @@ CHECK_HTML = """
     row.noBtn.classList.toggle("on", !ok);
   }
 
-  ITEMS.forEach(function (name) {
+  function hasText(row) { return row.input.value.trim() !== ""; }
+
+  // Focus the next EMPTY box after position idx (wraps around). If none is left, leave the box.
+  function focusNextEmpty(idx) {
+    for (let k = 1; k < rows.length; k++) {
+      const j = (idx + k) % rows.length;
+      if (!hasText(rows[j])) { rows[j].input.focus(); return; }
+    }
+    rows[idx].input.blur();
+  }
+
+  ITEMS.forEach(function (name, idx) {
     const wrap = document.createElement("div");
     wrap.className = "row";
 
@@ -775,7 +786,7 @@ CHECK_HTML = """
 
     const noBtn = document.createElement("button");
     noBtn.className = "ic no";
-    noBtn.title = "Not OK";
+    noBtn.title = "Clear this box";
     noBtn.innerHTML = CROSS;
 
     const head = document.createElement("div");
@@ -788,9 +799,26 @@ CHECK_HTML = """
     input.autocomplete = "off";
 
     const row = { okBtn: okBtn, noBtn: noBtn, head: head, input: input };
-    okBtn.addEventListener("click", function () { setState(row, true); });
-    noBtn.addEventListener("click", function () { setState(row, false); });
-    setState(row, false);               // red until you tick it
+
+    // Empty box = red. Writing something and pressing Enter = green, then jump to the next empty box.
+    input.addEventListener("input", function () {
+      if (!hasText(row)) { setState(row, false); }
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" || e.isComposing) { return; }
+      e.preventDefault();
+      if (hasText(row)) { setState(row, true); }
+      focusNextEmpty(idx);
+    });
+    // The icons still work: tick = green (if the box has text), cross = empty the box and turn red.
+    okBtn.addEventListener("click", function () {
+      if (hasText(row)) { setState(row, true); } else { input.focus(); }
+    });
+    noBtn.addEventListener("click", function () {
+      input.value = "";
+      setState(row, false);
+    });
+    setState(row, false);               // red until you fill the box
 
     wrap.appendChild(okBtn);
     wrap.appendChild(noBtn);
@@ -801,7 +829,8 @@ CHECK_HTML = """
   });
 
   document.getElementById("clear").addEventListener("click", function () {
-    rows.forEach(function (r) { setState(r, false); r.input.value = ""; });
+    rows.forEach(function (r) { r.input.value = ""; setState(r, false); });
+    if (rows.length) { rows[0].input.focus(); }
   });
 
   // Make the frame exactly as tall as the content (when the browser allows it).
