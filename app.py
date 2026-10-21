@@ -722,46 +722,35 @@ CHECK_HTML = """
   * {box-sizing: border-box;}
   body {margin:0; font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;
         color:#1f2937; background:transparent;}
-  .row {display:grid; grid-template-columns:34px 34px minmax(0,1fr) minmax(0,1fr);
-        gap:6px; align-items:stretch; margin:0 0 8px;}
-  .ic {width:34px; min-height:38px; border:1px solid #e3e7ee; background:#ffffff;
-       border-radius:8px; cursor:pointer; padding:0; display:flex;
-       align-items:center; justify-content:center;}
-  .ic svg {width:18px; height:18px; stroke:#9ca3af; fill:none; stroke-width:3;
-           stroke-linecap:round; stroke-linejoin:round;}
-  .ic.ok.on {background:#22c55e; border-color:#22c55e;}
-  .ic.no.on {background:#ef4444; border-color:#ef4444;}
-  .ic.on svg {stroke:#ffffff;}
-  .head {border-radius:8px; padding:8px 10px; font-size:14px; font-weight:600;
+  .row {display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);
+        gap:8px; align-items:stretch; margin:0 0 10px;}
+  .head {border-radius:8px; padding:10px 12px; font-size:14px; font-weight:600;
          color:#ffffff; display:flex; align-items:center; line-height:1.2;
-         word-break:break-word;}
+         word-break:break-word; min-height:42px;}
   .head.red {background:#ef4444;}
   .head.green {background:#22c55e;}
-  input {width:100%; min-width:0; border:1px solid transparent; background:#eef2f8;
-         border-radius:8px; padding:8px 10px; font-size:14px; color:#1f2937;
-         font-family:inherit; outline:none;}
-  input:focus {border-color:#4f7cff; background:#ffffff;}
+  input {width:100%; min-width:0; min-height:42px; background:#ffffff;
+         border:1.5px solid #94a3b8; border-radius:8px; padding:9px 12px;
+         font-size:14px; color:#1f2937; font-family:inherit; outline:none;
+         box-shadow:0 1px 2px rgba(15,23,42,0.08);}
+  input::placeholder {color:#94a3b8; opacity:1;}
+  input:focus {border-color:#4f7cff; box-shadow:0 0 0 3px rgba(79,124,255,0.18);}
   .clear {margin-top:4px; width:100%; border:1px solid #e3e7ee; background:#ffffff;
-          border-radius:8px; padding:8px; font-size:14px; color:#4b5563; cursor:pointer;}
+          border-radius:8px; padding:9px; font-size:14px; color:#4b5563; cursor:pointer;}
   @media (max-width: 340px) {
-    .row {grid-template-columns:34px 34px minmax(0,1fr);}
-    .row input {grid-column: 1 / -1;}
+    .row {grid-template-columns:minmax(0,1fr);}
   }
 </style>
 <div id="list"></div>
 <button class="clear" id="clear">Clear all</button>
 <script>
   const ITEMS = __ITEMS__;
-  const CHECK = '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg>';
-  const CROSS = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   const list = document.getElementById("list");
   const rows = [];
 
   function setState(row, ok) {
     row.head.classList.toggle("green", ok);
     row.head.classList.toggle("red", !ok);
-    row.okBtn.classList.toggle("on", ok);
-    row.noBtn.classList.toggle("on", !ok);
   }
 
   function hasText(row) { return row.input.value.trim() !== ""; }
@@ -779,26 +768,17 @@ CHECK_HTML = """
     const wrap = document.createElement("div");
     wrap.className = "row";
 
-    const okBtn = document.createElement("button");
-    okBtn.className = "ic ok";
-    okBtn.title = "OK";
-    okBtn.innerHTML = CHECK;
-
-    const noBtn = document.createElement("button");
-    noBtn.className = "ic no";
-    noBtn.title = "Clear this box";
-    noBtn.innerHTML = CROSS;
-
     const head = document.createElement("div");
     head.className = "head red";
     head.textContent = name;
 
     const input = document.createElement("input");
     input.type = "text";
+    input.placeholder = "Write Here and Press Enter";
     input.setAttribute("aria-label", name);
     input.autocomplete = "off";
 
-    const row = { okBtn: okBtn, noBtn: noBtn, head: head, input: input };
+    const row = { head: head, input: input };
 
     // Empty box = red. Writing something and pressing Enter = green, then jump to the next empty box.
     input.addEventListener("input", function () {
@@ -810,18 +790,8 @@ CHECK_HTML = """
       if (hasText(row)) { setState(row, true); }
       focusNextEmpty(idx);
     });
-    // The icons still work: tick = green (if the box has text), cross = empty the box and turn red.
-    okBtn.addEventListener("click", function () {
-      if (hasText(row)) { setState(row, true); } else { input.focus(); }
-    });
-    noBtn.addEventListener("click", function () {
-      input.value = "";
-      setState(row, false);
-    });
     setState(row, false);               // red until you fill the box
 
-    wrap.appendChild(okBtn);
-    wrap.appendChild(noBtn);
     wrap.appendChild(head);
     wrap.appendChild(input);
     list.appendChild(wrap);
@@ -851,7 +821,7 @@ def checklist_tab():
 
     st.markdown("### Checklist")
     html = CHECK_HTML.replace("__ITEMS__", json.dumps(CHECK_ITEMS).replace("</", "<\\/"))
-    components.html(html, height=len(CHECK_ITEMS) * 54 + 70, scrolling=True)
+    components.html(html, height=len(CHECK_ITEMS) * 56 + 70, scrolling=True)
 
 
 # =====================================================================
