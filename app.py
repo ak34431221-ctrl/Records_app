@@ -760,51 +760,87 @@ CHECK_HTML = r"""
     return m ? parseFloat(m[0]) : null;
   }
 
-  // ---------- rules: return true = GREEN, false = RED (t = what you typed, lower case) ----------
+  // ---------- word lists ----------
+  // Everything you type is checked in lower case. Add new words to any list below, separated by "|".
+  // W("a|b") = the whole word a or b (not a piece of a longer word).
+  function W(words) { return new RegExp("(^|[^a-z])(?:" + words + ")(?![a-z])"); }
+
+  // Double negatives are GOOD: "problem nai", "no error", "red nai", "down na", "loss free" -> treated like "ok"
+  const BAD_THINGS = "problem|issue|error|fault|loss|lost|drop|dropped|down|dn|offline|off|red|lal|laal|fail|failed|failure|bondho|bondo|bandho|somossa|shomossa|kharap|disconnect|disconnected|timeout|flap|flapping|slow|low|weak|los|losi";
+  const NEGATORS = "no|not|never|na|nai|nei|nay|nahi|ni|without|zero|free";
+  const DOUBLE_NEG = new RegExp("(^|[^a-z])(?:(?:kono |any )?(?:" + BAD_THINGS + ")(?: hoy| hoise)? (?:" + NEGATORS + ")|(?:" + NEGATORS + ") (?:" + BAD_THINGS + "))(?![a-z])", "g");
+  function fixNeg(t) { return t.replace(DOUBLE_NEG, "$1 ok "); }
+
+  // Negative words (bad / no / not working) - used by every heading
+  const NEG = W("no|not|never|na|ni|nai|nei|nay|nahi|nae|fail|failed|failure|failing|error|wrong|invalid|denied|incorrect|unable|cannot|cant|can't|hoy ni|hoy nai|hoyni|hoynai|hoyna|hobe na|cholena|cholchena|cholchhena|cholsena|korena|korchena|pacchena|pachena|painai|painei|paini|dekhayna|bad|poor|kharap|kharaap|problem|issue|somossa|shomossa|dead|down|dn|off|offline|fault|faulty|broken|missing|lost|bondho|bondo|bandho|inactive|unstable|blocked|slow|low|weak|vul|bhul");
+  const NEG_BN = /না|নেই|নাই|নয়|খারাপ|সমস্যা|বন্ধ|ব্যর্থ|হয়নি|নষ্ট/;
+  function negative(f) { return NEG.test(f) || NEG_BN.test(f); }
+
+  // Positive words (ok / pacche / thik ache / valo ...)
+  const GOOD = W("ok|okay|okk|oky|fine|good|nice|great|perfect|excellent|normal|stable|strong|active|working|running|available|connected|online|up|ache|chalu|pacche|pacchi|pachhe|pachhi|pachi|paichi|paiche|thik|thik ache|thikache|theek|valo|bhalo|bhal|cholche|cholchhe|cholse|kaj kore|kaj korche|kaj korse|done|pass|passed");
+  const GOOD_BN = /ঠিক|ভালো|ভাল|পাচ্ছে|পাচ্ছি|চলছে|আছে/;
+  function goodWord(f) { return (GOOD.test(f) || GOOD_BN.test(f)) && !negative(f); }
+
+  // Heading specific words
+  const LIGHT_RED = W("red|lal|laal|lall|los|losi|off|dark|dead|blank");
+  const STATUS_RED = W("offline|off|bondho|bondo|bandho|bando|band|inactive|dead|disconnected|disconnect|unreachable|unregistered|deregistered|dying gasp|dyinggasp|power off|los|losi|lost|not online|no online|down|dn|unavailable");
+  const MAC_RED = W("notfound|none|null|nil|nothing|empty|blank|unknown|unavailable|absent|n/a|nahi|unreachable|invalid");
+  const PORT_RED = W("down|dn|notconnect|disconnected|disconnect|unplugged|inactive|errdisabled|err-disabled|no carrier|no link|link nai|cable nai|khola|bondho|bondo|off|los|failed");
+  const ERP_RED = W("unsuccessful|unsuccess|blocked|locked|expired|expire|timeout|time out|timed out|rejected|refused|incorrect|captcha|stuck|unable|cannot|wrong");
+  const ERP_GREEN = W("success|successful|successfully|hoyeche|hoyece|hoyechhe|hoise|hoyse|hoiche|hoyese|hoeche|hoice|done|complete|completed|logged in|login ok|passed|granted|verified|approved|accepted|confirmed|sesh|shesh|finished|hoye gese|hoye gelo|hoye geche|hoy gese");
+  const ERP_GREEN_BN = /হয়েছে|সফল|হয়ে গেছে|ঠিক আছে/;
+  const LOSS_WORD = W("loss|lost");
+  const PPP_RED = W("drop|dropped|drops|timeout|time out|timed out|rto|flap|flapping|disconnect|disconnected|disconnecting|reconnect|reconnecting|unstable|lag|lagging|jitter|high|beshi|intermittent|kete|cut|bar bar|barbar");
+
+  // ---------- rules: return true = GREEN, false = RED ----------
+  // t = what you typed (lower case),  f = the same text with double negatives turned into "ok"
   const RULES = {
-    // red if it says red / lal / laal
-    light: function (t) {
-      return !/(^|[^a-z])(red|lal|laal|lall)([^a-z]|$)|লাল/.test(t);
+    // Light: red if it says red / lal / los / off / dark, or something negative ("light nai", "jolche na")
+    light: function (t, f) {
+      return !(LIGHT_RED.test(f) || /লাল/.test(f) || negative(f));
     },
-    // red if offline / off / bondho / cholche na
-    status: function (t) {
-      return !/(^|[^a-z])off|(^|[^a-z])b[ao]nd+h?o([^a-z]|$)|(^|[^a-z])chol(?:che|chhe|se|e)?\s*na([^a-z]|$)|not\s+online|বন্ধ|চলছে\s*না|চলে\s*না/.test(t);
+    // Status: red if offline / bondho / down / cholche na ...
+    status: function (t, f) {
+      return !(STATUS_RED.test(f) || /বন্ধ|চলছে\s*না|চলে\s*না/.test(f) || negative(f));
     },
-    // green only when the number (ignoring minus) is between 12 and 24
-    power: function (t) {
+    // Power: a number decides (12 to 24 = green, minus ignored). With no number: ok / pacche / valo ... = green
+    power: function (t, f) {
       const n = firstNumber(t);
-      return n !== null && n >= 12 && n <= 24;
+      if (n !== null) { return n >= 12 && n <= 24; }
+      return goodWord(f);
     },
-    // red if it says the router mac is not found / negative words
-    mac: function (t) {
-      return !/(^|[^a-z])(no|not|none|null|nil|nothing|empty|missing|unknown|invalid|fail|failed|failure|error|n\/a|na|ni|nai|nei|nahi|unavailable|absent)([^a-z]|$)|নেই|না|পাওয়া যায়নি/.test(t);
+    // Router Mac: red if it says not found / nai / pacche na / empty ...
+    mac: function (t, f) {
+      if (/^[\s\-_.:?\/0]+$/.test(f)) { return false; }          // only dashes or zeros
+      return !(MAC_RED.test(f) || negative(f));
     },
-    // red if it says down
-    port: function (t) {
-      return !/down/.test(t);
+    // Port: red if down / link nai / disconnected ...
+    port: function (t, f) {
+      return !(PORT_RED.test(f) || negative(f));
     },
-    // green only for ok / success / hoyeche / done (and not when "failed", "not ok" ...)
-    erp: function (t) {
-      if (/fail|unsuccess|(^|[^a-z])(not|no|error|wrong|invalid|denied|na|ni)([^a-z]|$)|hoy ?ni|hoyna|হয়নি|ব্যর্থ|না/.test(t)) { return false; }
-      return /(^|[^a-z])(ok|okay|success|successful|successfully|hoyeche|hoyece|hoise|hoyse|hoiche|hoyese|done|complete|completed)([^a-z]|$)|logged in|হয়েছে|সফল|ঠিক আছে/.test(t);
+    // ERP login: green only for ok / success / hoyeche / done ...; red for failed / wrong / hoy ni ...
+    erp: function (t, f) {
+      if (negative(f) || ERP_RED.test(f)) { return false; }
+      return GOOD.test(f) || GOOD_BN.test(f) || ERP_GREEN.test(f) || ERP_GREEN_BN.test(f);
     },
-    // red if the number is 0 or below 10 (k / m / g after the number are understood as Kbps / Mbps / Gbps)
-    bandwidth: function (t) {
+    // Bandwidth: a number decides (10 or more = green; k / m / g = Kbps / Mbps / Gbps). With no number: ok / pacche / valo ... = green
+    bandwidth: function (t, f) {
       const m = t.match(/(\d+(?:\.\d+)?)(?:\s*([kmg])(?:bps|bits?|b)?(?![a-z]))?/);
-      if (!m) { return false; }
+      if (!m) { return goodWord(f); }
       let v = parseFloat(m[1]);
       if (m[2] === "k") { v = v / 1000; } else if (m[2] === "g") { v = v * 1000; }
       return v >= 10;
     },
-    // red if there is loss; 0% loss is green
-    ppp: function (t) {
+    // PPP: red if there is loss (0% loss = green), drop, timeout, disconnect, unstable ...
+    ppp: function (t, f) {
       const pcts = (t.match(/\d+(?:\.\d+)?(?=\s*%)/g) || []).map(parseFloat);
       if (pcts.length) { return !pcts.some(function (v) { return v > 0; }); }
-      if (!/los[st]/.test(t)) { return true; }                       // loss is not mentioned
-      if (/no loss|zero loss|without loss|loss free|loss nai|loss nei|los[st] 0(?![\d.])|(^|[^\d.])0 los[st]/.test(t)) { return true; }
-      const m = t.match(/los[st]\D{0,12}(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\D{0,12}los[st]/);
-      if (m) { return parseFloat(m[1] !== undefined ? m[1] : m[2]) === 0; }
-      return false;                                                  // "loss" written without a number
+      if (LOSS_WORD.test(f)) {
+        const m = f.match(/los[st]\D{0,12}(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\D{0,12}los[st]/);
+        if (m) { return parseFloat(m[1] !== undefined ? m[1] : m[2]) === 0; }
+        return false;                                                // "loss" written without a number
+      }
+      return !(PPP_RED.test(f) || negative(f));
     }
   };
 
@@ -817,7 +853,10 @@ CHECK_HTML = r"""
     row.head.classList.toggle("red", !ok);
   }
   function hasText(row) { return row.input.value.trim() !== ""; }
-  function evaluate(row) { setState(row, row.rule(norm(row.input.value))); }
+  function evaluate(row) {
+    const t = norm(row.input.value);
+    setState(row, row.rule(t, fixNeg(t)));
+  }
 
   // Focus the next EMPTY box after position idx (wraps around). If none is left, leave the box.
   function focusNextEmpty(idx) {
