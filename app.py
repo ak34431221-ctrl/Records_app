@@ -691,6 +691,7 @@ def olt_tab():
             ("Find Onu (ONU MAC)", f"display ont info by-sn {h_sn or '<ONU MAC>'}"),
             ("Find Onu (Router MAC)", f"display location {huawei_mac or '<Router MAC>'}"),
             ("Onu Info", f"display ont info {pon} {onu}"),
+            ("10 time basic-info", f"display ont register-info {pon} {onu}"),
             ("Onu Power Info", f"display ont optical-info {pon} {onu}"),
             ("Reset", f"ont reset {pon} {onu}"),
             ("Onu All Power", f"display ont optical-info history rx {pon} {onu}"),
