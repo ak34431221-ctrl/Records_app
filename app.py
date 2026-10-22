@@ -380,7 +380,7 @@ def r_delete(rid):
     fetch_records.clear()
     if S.r_editing_id == rid:
         r_clear_form()
-    S.r_flash = ("success", "Deleted from the app. A copy is kept in the database.")
+    S.r_flash = ("success", "Deleted from the app.")
 
 
 def r_image_grid(imgs, kind=None):
@@ -1017,7 +1017,7 @@ def cu_delete(rid):
     cu_fetch.clear()
     if S.cu_editing_id == rid:
         cu_clear()
-    S.cu_flash = ("success", "Deleted from the app. A copy is kept in the database.")
+    S.cu_flash = ("success", "Deleted from the app.")
 
 
 def cu_file_text(rec):
@@ -1196,7 +1196,7 @@ def pay_delete(rid):
     pay_fetch.clear()
     if S.pay_editing_id == rid:
         pay_clear_form()
-    S.pay_flash = ("success", "Deleted from the app. A copy is kept in the database.")
+    S.pay_flash = ("success", "Deleted from the app.")
 
 
 def pay_file_text(rec):
@@ -1379,7 +1379,7 @@ def nt_delete(rid):
     nt_fetch.clear()
     if S.nt_editing_id == rid:
         nt_clear()
-    S.nt_flash = ("success", "Deleted from the app. A copy is kept in the database.")
+    S.nt_flash = ("success", "Deleted from the app.")
 
 
 def notes_tab():
