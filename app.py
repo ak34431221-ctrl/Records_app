@@ -706,18 +706,19 @@ def olt_tab():
 # =====================================================================
 # 3b. CHECKLIST (runs in the browser, nothing is saved)
 # =====================================================================
+# (heading, rule) - the rule decides the colour of the heading after you press Enter
 CHECK_ITEMS = [
-    "Onu and Router Light",
-    "Onu Status",
-    "Power",
-    "Router Mac",
-    "Port up/down",
-    "ERP Login Success or failed",
-    "Mikrotic Bandwidth",
-    "Mikrotic PPP",
+    ("Onu and Router Light", "light"),
+    ("Onu Status Online/Offline", "status"),
+    ("Onu Power", "power"),
+    ("Router Mac", "mac"),
+    ("Port up/down", "port"),
+    ("ERP Login Success or Failed", "erp"),
+    ("Mikrotic Bandwidth", "bandwidth"),
+    ("Mikrotic PPP", "ppp"),
 ]
 
-CHECK_HTML = """
+CHECK_HTML = r"""
 <style>
   * {box-sizing: border-box;}
   body {margin:0; font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -745,6 +746,69 @@ CHECK_HTML = """
 <button class="clear" id="clear">Clear all</button>
 <script>
   const ITEMS = __ITEMS__;
+
+  // ---------- helpers ----------
+  const BN = "০১২৩৪৫৬৭৮৯";
+  function norm(t) {                       // lower case, Bangla digits -> 0-9, "1,000" -> "1000"
+    return t.toLowerCase()
+      .replace(/[০-৯]/g, function (d) { return String(BN.indexOf(d)); })
+      .replace(/(\d),(?=\d{3}(?!\d))/g, "$1")
+      .replace(/\s+/g, " ").trim();
+  }
+  function firstNumber(t) {                // the number only; a minus sign is ignored
+    const m = t.match(/\d+(?:\.\d+)?/);
+    return m ? parseFloat(m[0]) : null;
+  }
+
+  // ---------- rules: return true = GREEN, false = RED (t = what you typed, lower case) ----------
+  const RULES = {
+    // red if it says red / lal / laal
+    light: function (t) {
+      return !/(^|[^a-z])(red|lal|laal|lall)([^a-z]|$)|লাল/.test(t);
+    },
+    // red if offline / off / bondho / cholche na
+    status: function (t) {
+      return !/(^|[^a-z])off|(^|[^a-z])b[ao]nd+h?o([^a-z]|$)|(^|[^a-z])chol(?:che|chhe|se|e)?\s*na([^a-z]|$)|not\s+online|বন্ধ|চলছে\s*না|চলে\s*না/.test(t);
+    },
+    // green only when the number (ignoring minus) is between 12 and 24
+    power: function (t) {
+      const n = firstNumber(t);
+      return n !== null && n >= 12 && n <= 24;
+    },
+    // red if it says the router mac is not found / negative words
+    mac: function (t) {
+      return !/(^|[^a-z])(no|not|none|null|nil|nothing|empty|missing|unknown|invalid|fail|failed|failure|error|n\/a|na|ni|nai|nei|nahi|unavailable|absent)([^a-z]|$)|নেই|না|পাওয়া যায়নি/.test(t);
+    },
+    // red if it says down
+    port: function (t) {
+      return !/down/.test(t);
+    },
+    // green only for ok / success / hoyeche / done (and not when "failed", "not ok" ...)
+    erp: function (t) {
+      if (/fail|unsuccess|(^|[^a-z])(not|no|error|wrong|invalid|denied|na|ni)([^a-z]|$)|hoy ?ni|hoyna|হয়নি|ব্যর্থ|না/.test(t)) { return false; }
+      return /(^|[^a-z])(ok|okay|success|successful|successfully|hoyeche|hoyece|hoise|hoyse|hoiche|hoyese|done|complete|completed)([^a-z]|$)|logged in|হয়েছে|সফল|ঠিক আছে/.test(t);
+    },
+    // red if the number is 0 or below 10 (k / m / g after the number are understood as Kbps / Mbps / Gbps)
+    bandwidth: function (t) {
+      const m = t.match(/(\d+(?:\.\d+)?)(?:\s*([kmg])(?:bps|bits?|b)?(?![a-z]))?/);
+      if (!m) { return false; }
+      let v = parseFloat(m[1]);
+      if (m[2] === "k") { v = v / 1000; } else if (m[2] === "g") { v = v * 1000; }
+      return v >= 10;
+    },
+    // red if there is loss; 0% loss is green
+    ppp: function (t) {
+      const pcts = (t.match(/\d+(?:\.\d+)?(?=\s*%)/g) || []).map(parseFloat);
+      if (pcts.length) { return !pcts.some(function (v) { return v > 0; }); }
+      if (!/los[st]/.test(t)) { return true; }                       // loss is not mentioned
+      if (/no loss|zero loss|without loss|loss free|loss nai|loss nei|los[st] 0(?![\d.])|(^|[^\d.])0 los[st]/.test(t)) { return true; }
+      const m = t.match(/los[st]\D{0,12}(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\D{0,12}los[st]/);
+      if (m) { return parseFloat(m[1] !== undefined ? m[1] : m[2]) === 0; }
+      return false;                                                  // "loss" written without a number
+    }
+  };
+
+  // ---------- screen ----------
   const list = document.getElementById("list");
   const rows = [];
 
@@ -752,8 +816,8 @@ CHECK_HTML = """
     row.head.classList.toggle("green", ok);
     row.head.classList.toggle("red", !ok);
   }
-
   function hasText(row) { return row.input.value.trim() !== ""; }
+  function evaluate(row) { setState(row, row.rule(norm(row.input.value))); }
 
   // Focus the next EMPTY box after position idx (wraps around). If none is left, leave the box.
   function focusNextEmpty(idx) {
@@ -764,30 +828,32 @@ CHECK_HTML = """
     rows[idx].input.blur();
   }
 
-  ITEMS.forEach(function (name, idx) {
+  ITEMS.forEach(function (item, idx) {
     const wrap = document.createElement("div");
     wrap.className = "row";
 
     const head = document.createElement("div");
     head.className = "head red";
-    head.textContent = name;
+    head.textContent = item[0];
 
     const input = document.createElement("input");
     input.type = "text";
     input.placeholder = "Write Here and Press Enter";
-    input.setAttribute("aria-label", name);
+    input.setAttribute("aria-label", item[0]);
     input.autocomplete = "off";
 
-    const row = { head: head, input: input };
+    const row = { head: head, input: input, rule: RULES[item[1]], done: false };
 
-    // Empty box = red. Writing something and pressing Enter = green, then jump to the next empty box.
+    // Empty box = red. Press Enter = check the text with this heading's rule, then jump to the next empty box.
+    // After the first Enter, the colour also follows your edits.
     input.addEventListener("input", function () {
-      if (!hasText(row)) { setState(row, false); }
+      if (!hasText(row)) { row.done = false; setState(row, false); }
+      else if (row.done) { evaluate(row); }
     });
     input.addEventListener("keydown", function (e) {
       if (e.key !== "Enter" || e.isComposing) { return; }
       e.preventDefault();
-      if (hasText(row)) { setState(row, true); }
+      if (hasText(row)) { row.done = true; evaluate(row); }
       focusNextEmpty(idx);
     });
     setState(row, false);               // red until you fill the box
@@ -799,7 +865,7 @@ CHECK_HTML = """
   });
 
   document.getElementById("clear").addEventListener("click", function () {
-    rows.forEach(function (r) { r.input.value = ""; setState(r, false); });
+    rows.forEach(function (r) { r.input.value = ""; r.done = false; setState(r, false); });
     if (rows.length) { rows[0].input.focus(); }
   });
 
@@ -1298,7 +1364,7 @@ def notes_tab():
             "Note",
             key="nt_text",
             height=260,
-            placeholder="Write your note here.",
+            placeholder="Write your note here. Drag the bottom-right corner of the box to make it bigger or smaller.",
         )
         b1, b2 = st.columns(2)
         b1.button("Save", type="primary", use_container_width=True, on_click=nt_save, key="nt_save")
