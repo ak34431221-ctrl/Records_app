@@ -665,6 +665,12 @@ def olt_tab():
             st.text_input("ONU MAC / SN", placeholder="ECOM-9D03FF9B", key="olt_b_sn")
         )
         olt_show([
+            ("Quick Copy (basic-info, power, port, mac)", "\n".join([
+                f"show gpon interface gpon 0/{pon}:{onu} onu basic-info",
+                f"show gpon interface gpon 0/{pon}:{onu} onu optical-transceiver-diagnosis",
+                f"show gpon interface gpon 0/{pon}:{onu} onu port 1 state",
+                f"show mac address-table interface gpon 0/{pon}:{onu}",
+            ])),
             ("Find Onu (ONU MAC)", f"show gpon onu-information sn {b_sn or '<ONU MAC>'}"),
             ("Find Onu (Router MAC)", f"show mac address-table | include {last4 or '<Router MAC>'}"),
             ("Onu Info", f"show gpon interface gpon 0/{pon}:{onu} onu basic-info"),
@@ -688,6 +694,11 @@ def olt_tab():
         slot = e2.number_input("Slot 0/_", min_value=0, value=1, step=1, key="olt_h_slot")
 
         olt_show([
+            ("Quick Copy (Onu Info, register-info, Onu Power Info)", "\n".join([
+                f"display ont info {pon} {onu}",
+                f"display ont register-info {pon} {onu}",
+                f"display ont optical-info {pon} {onu}",
+            ])),
             ("Find Onu (ONU MAC)", f"display ont info by-sn {h_sn or '<ONU MAC>'}"),
             ("Find Onu (Router MAC)", f"display location {huawei_mac or '<Router MAC>'}"),
             ("Onu Info", f"display ont info {pon} {onu}"),
